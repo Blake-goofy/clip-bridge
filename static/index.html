@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clip Bridge</title>
+  <style nonce="{{NONCE}}">
+    :root {
+      color-scheme: light dark;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f7f7f4;
+      color: #171717;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    main {
+      width: min(100%, 520px);
+      display: grid;
+      gap: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+    p { margin: 0; color: #5f625b; line-height: 1.5; }
+    .panel {
+      border: 1px solid #d9dbd2;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      box-shadow: 0 1px 8px rgba(20, 20, 15, .06);
+    }
+    .qr {
+      width: min(100%, 288px);
+      aspect-ratio: 1;
+      justify-self: center;
+      border: 1px solid #d9dbd2;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+    .qr img { display: block; width: 100%; height: 100%; }
+    .status {
+      min-height: 24px;
+      font-weight: 650;
+    }
+    .muted { color: #666a61; font-size: 14px; }
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 14px;
+      background: #174ea6;
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #e8ebe3;
+      color: #171717;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+    textarea {
+      width: 100%;
+      min-height: 150px;
+      resize: vertical;
+      border: 1px solid #c7cabf;
+      border-radius: 8px;
+      padding: 12px;
+      font: inherit;
+      background: #fff;
+      color: #171717;
+    }
+    .hidden { display: none !important; }
+    #toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%);
+      max-width: calc(100vw - 32px);
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #171717;
+      color: #fff;
+      font-size: 14px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .15s ease;
+    }
+    #toast.show { opacity: 1; }
+    @media (prefers-color-scheme: dark) {
+      :root { background: #11130f; color: #f4f4ef; }
+      .panel { background: #1b1d18; border-color: #34372f; box-shadow: none; }
+      p, .muted { color: #b9beb1; }
+      button.secondary { background: #34372f; color: #f4f4ef; }
+      textarea { background: #11130f; color: #f4f4ef; border-color: #494d42; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Clip Bridge</h1>
+      <p id="subtitle">Private browser-to-browser clipboard relay.</p>
+    </header>
+
+    <section id="pc" class="panel hidden" aria-label="PC clipboard receiver">
+      <div class="qr"><img id="qr" alt="QR code for pairing iPhone"></div>
+      <div id="pcStatus" class="status">Creating session...</div>
+      <div id="device" class="muted">No phone connected.</div>
+      <textarea id="received" class="hidden" readonly aria-label="Received clipboard text"></textarea>
+      <div class="actions">
+        <button id="copyAgain" class="secondary hidden" type="button">Copy</button>
+        <button id="newSession" class="secondary" type="button">New Session</button>
+      </div>
+    </section>
+
+    <section id="mobile" class="panel hidden" aria-label="iPhone clipboard sender">
+      <div id="mobileStatus" class="status">Connecting...</div>
+      <p class="muted">Send text from this phone to the paired PC tab.</p>
+      <div class="actions">
+        <button id="sendClipboard" type="button">Send Clipboard</button>
+      </div>
+      <textarea id="manualText" placeholder="Paste text here if Safari blocks clipboard access" aria-label="Manual text fallback"></textarea>
+      <div class="actions">
+        <button id="sendManual" class="secondary" type="button">Send Text</button>
+      </div>
+    </section>
+  </main>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script nonce="{{NONCE}}">
+    const pc = document.querySelector("#pc");
+    const mobile = document.querySelector("#mobile");
+    const toast = document.querySelector("#toast");
+    const sessionMatch = location.pathname.match(/^\/s\/([^/]+)$/);
+    let sid = sessionMatch ? sessionMatch[1] : "";
+    let lastText = "";
+    let joined = false;
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+
+    async function postJSON(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {})
+      });
+      if (!res.ok) {
+        let message = "Request failed";
+        try {
+          const data = await res.json();
+          message = data.error || message;
+        } catch (_) {}
+        throw new Error(message);
+      }
+      return res.json();
+    }
+
+    async function startPC() {
+      pc.classList.remove("hidden");
+      const status = document.querySelector("#pcStatus");
+      const device = document.querySelector("#device");
+      const qr = document.querySelector("#qr");
+      const copyAgain = document.querySelector("#copyAgain");
+      const received = document.querySelector("#received");
+
+      const data = await postJSON("/api/session");
+      sid = data.sid;
+      qr.src = data.qrURL;
+      status.textContent = "Scan this QR code with your iPhone.";
+
+      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${scheme}//${location.host}/ws/${sid}/pc`);
+      ws.onopen = () => status.textContent = "Waiting for iPhone...";
+      ws.onclose = () => status.textContent = "Session closed. Create a new session to reconnect.";
+      ws.onerror = () => status.textContent = "Connection failed. Create a new session to retry.";
+      ws.onmessage = async (message) => {
+        const event = JSON.parse(message.data);
+        if (event.type === "presence") {
+          device.textContent = event.connected ? `${event.device || "Mobile"} connected.` : "No phone connected.";
+          status.textContent = "Ready to receive clipboard text.";
+          return;
+        }
+        if (event.type !== "clipboard.text") return;
+        lastText = event.text || "";
+        received.value = lastText;
+        received.classList.remove("hidden");
+        try {
+          if (!document.hasFocus()) throw new Error("tab is not active");
+          await navigator.clipboard.writeText(lastText);
+          copyAgain.classList.add("hidden");
+          status.textContent = "Copied to Windows clipboard.";
+          showToast("Clipboard received");
+        } catch (_) {
+          copyAgain.classList.remove("hidden");
+          status.textContent = "Received text. Use Copy to place it on the clipboard.";
+          showToast("Clipboard received");
+        }
+      };
+
+      copyAgain.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(lastText);
+          status.textContent = "Copied to Windows clipboard.";
+          copyAgain.classList.add("hidden");
+        } catch (_) {
+          received.focus();
+          received.select();
+          status.textContent = "Clipboard blocked. Text is selected for manual copy.";
+        }
+      };
+      document.querySelector("#newSession").onclick = () => location.href = "/";
+    }
+
+    function deviceLabel() {
+      const ua = navigator.userAgent || "";
+      if (/iPhone/i.test(ua)) return "iPhone";
+      if (/iPad/i.test(ua)) return "iPad";
+      return "Mobile";
+    }
+
+    async function joinMobile() {
+      if (joined) return;
+      await postJSON(`/api/session/${sid}/join`, { device: deviceLabel() });
+      joined = true;
+      document.querySelector("#mobileStatus").textContent = "Connected to PC.";
+    }
+
+    async function sendText(text) {
+      await joinMobile();
+      await postJSON(`/api/session/${sid}/clipboard`, { text });
+      document.querySelector("#mobileStatus").textContent = "Sent.";
+      showToast("Clipboard sent");
+    }
+
+    async function startMobile() {
+      mobile.classList.remove("hidden");
+      const status = document.querySelector("#mobileStatus");
+      const manual = document.querySelector("#manualText");
+      joinMobile().catch((err) => status.textContent = err.message);
+
+      document.querySelector("#sendClipboard").onclick = async () => {
+        try {
+          const text = await navigator.clipboard.readText();
+          await sendText(text);
+        } catch (_) {
+          status.textContent = "Clipboard access blocked. Paste below and send text.";
+          manual.focus();
+        }
+      };
+      document.querySelector("#sendManual").onclick = async () => {
+        try {
+          await sendText(manual.value);
+        } catch (err) {
+          status.textContent = err.message;
+        }
+      };
+    }
+
+    if (sid) {
+      startMobile();
+    } else {
+      startPC().catch((err) => {
+        pc.classList.remove("hidden");
+        document.querySelector("#pcStatus").textContent = err.message;
+      });
+    }
+  </script>
+</body>
+</html>

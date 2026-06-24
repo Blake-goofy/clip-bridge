@@ -113,7 +113,7 @@ func TestDefaultDeviceNamesAndMobileRenameBroadcast(t *testing.T) {
 	t.Fatal("renamed device was not broadcast")
 }
 
-func TestRotateJoinLinkKeepsSessionDevices(t *testing.T) {
+func TestRotateJoinLinkDropsOtherDevicesAndStaleLink(t *testing.T) {
 	h := newHub()
 	sid, pcToken, err := h.createSession()
 	if err != nil {
@@ -128,8 +128,14 @@ func TestRotateJoinLinkKeepsSessionDevices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	readDevicesEvent(t, "pc", pcCh)
+	mobileCh, err := h.connectMobile(sid, mobileToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readDevicesEvent(t, "mobile", mobileCh)
 
-	newSID, err := h.rotateJoinLink(sid, mobileToken)
+	newSID, err := h.rotateJoinLink(sid, pcToken)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,16 +145,40 @@ func TestRotateJoinLinkKeepsSessionDevices(t *testing.T) {
 	if !h.exists(newSID) {
 		t.Fatal("rotated join link does not resolve")
 	}
+	if h.joinLinkExists(sid) {
+		t.Fatal("old join link should be stale")
+	}
 	linkEvent := readLinkEvent(t, "pc", pcCh)
 	if linkEvent.SID != newSID {
 		t.Fatalf("link event sid = %q, want %q", linkEvent.SID, newSID)
 	}
+	devices := readDevicesEvent(t, "pc", pcCh)
+	if len(devices.Devices) != 1 || devices.Devices[0].Name != "Device1" {
+		t.Fatalf("devices after rotated join = %#v, want only requester", devices.Devices)
+	}
+	select {
+	case _, ok := <-mobileCh:
+		if ok {
+			t.Fatal("stale mobile channel should be closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale mobile channel should be closed")
+	}
+	if err := h.verifyMobile(sid, mobileToken); err == nil {
+		t.Fatal("stale mobile token should not verify")
+	}
+	if err := h.relayClipboard(sid, mobileToken, "hello"); err != errUnauthorized {
+		t.Fatalf("stale mobile send err = %v, want unauthorized", err)
+	}
+	if _, _, err := h.joinMobile(sid, "", ""); err == nil {
+		t.Fatal("old join link should not accept new devices")
+	}
 	if _, _, err := h.joinMobile(newSID, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	devices := readDevicesEvent(t, "pc", pcCh)
-	if len(devices.Devices) != 3 {
-		t.Fatalf("devices after rotated join = %d, want 3: %#v", len(devices.Devices), devices.Devices)
+	devices = readDevicesEvent(t, "pc", pcCh)
+	if len(devices.Devices) != 2 {
+		t.Fatalf("devices after new link join = %d, want 2: %#v", len(devices.Devices), devices.Devices)
 	}
 }
 

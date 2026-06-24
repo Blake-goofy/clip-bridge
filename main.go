@@ -57,6 +57,7 @@ type hub struct {
 
 type session struct {
 	id         string
+	joinID     string
 	pcHash     [32]byte
 	createdAt  time.Time
 	lastSeen   time.Time
@@ -169,7 +170,7 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleQR(w http.ResponseWriter, r *http.Request) {
 	sid := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/qr/"), ".png")
-	if !a.hub.exists(sid) {
+	if !a.hub.joinLinkExists(sid) {
 		http.NotFound(w, r)
 		return
 	}
@@ -462,6 +463,7 @@ func (h *hub) createSession() (string, string, error) {
 		}
 		s := &session{
 			id:         sid,
+			joinID:     sid,
 			pcHash:     tokenHash(pcToken),
 			createdAt:  now,
 			lastSeen:   now,
@@ -493,6 +495,15 @@ func (h *hub) exists(sid string) bool {
 	h.cleanupLocked(now)
 	_, ok := h.sessionLocked(sid)
 	return ok
+}
+
+func (h *hub) joinLinkExists(sid string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	h.cleanupLocked(now)
+	s, ok := h.sessionLocked(sid)
+	return ok && sid == s.joinID
 }
 
 func (h *hub) verifyPC(sid, token string) error {
@@ -583,6 +594,9 @@ func (h *hub) joinMobile(sid, existingToken, deviceName string) (mobileToken str
 	h.cleanupLocked(now)
 	s, ok := h.sessionLocked(sid)
 	if !ok {
+		return "", false, errNotFound
+	}
+	if sid != s.joinID {
 		return "", false, errNotFound
 	}
 	if d := findDeviceByTokenLocked(s, existingToken); d != nil {
@@ -746,7 +760,8 @@ func (h *hub) rotateJoinLink(sid, token string) (string, error) {
 	if !ok {
 		return "", errNotFound
 	}
-	if findDeviceByTokenLocked(s, token) == nil {
+	requester := findDeviceByTokenLocked(s, token)
+	if requester == nil {
 		return "", errUnauthorized
 	}
 	for i := 0; i < 5; i++ {
@@ -760,9 +775,30 @@ func (h *hub) rotateJoinLink(sid, token string) (string, error) {
 		if _, ok := h.aliases[newSID]; ok {
 			continue
 		}
+		for alias, target := range h.aliases {
+			if target == s.id {
+				delete(h.aliases, alias)
+			}
+		}
 		h.aliases[newSID] = s.id
+		s.joinID = newSID
+		// ponytail: rotating a join link is a hard device reset; use per-device grants if partial revocation is needed later.
+		for id, d := range s.devices {
+			if d == requester {
+				continue
+			}
+			delete(s.devices, id)
+			if d.send != nil {
+				if s.pcSend == d.send {
+					s.pcSend = nil
+				}
+				close(d.send)
+				d.send = nil
+			}
+		}
 		s.lastSeen = now
 		_ = broadcastLocked(s, event{Type: "link", SID: newSID})
+		_ = broadcastDevicesLocked(s)
 		return newSID, nil
 	}
 	return "", errors.New("could not allocate session id")

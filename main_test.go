@@ -66,6 +66,92 @@ func TestMultipleMobilesAndCookieReuse(t *testing.T) {
 	}
 }
 
+func TestDefaultDeviceNamesAndMobileRenameBroadcast(t *testing.T) {
+	h := newHub()
+	sid, _, err := h.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstToken, _, err := h.joinMobile(sid, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondToken, _, err := h.joinMobile(sid, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCh, err := h.connectMobile(sid, secondToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initial := readDevicesEvent(t, "second", secondCh)
+	names := map[string]string{}
+	var firstID string
+	for _, d := range initial.Devices {
+		names[d.Name] = d.ID
+		if d.Name == "Device2" {
+			firstID = d.ID
+		}
+	}
+	for _, want := range []string{"Device1", "Device2", "Device3"} {
+		if names[want] == "" {
+			t.Fatalf("missing default device name %q in %#v", want, initial.Devices)
+		}
+	}
+	if err := h.renameDevice(sid, firstToken, firstID, "Blake phone"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		updated := readDevicesEvent(t, "second", secondCh)
+		for _, d := range updated.Devices {
+			if d.ID == firstID && d.Name == "Blake phone" {
+				return
+			}
+		}
+	}
+	t.Fatal("renamed device was not broadcast")
+}
+
+func TestRotateJoinLinkKeepsSessionDevices(t *testing.T) {
+	h := newHub()
+	sid, pcToken, err := h.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcCh, err := h.connectPC(sid, pcToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-pcCh
+	mobileToken, _, err := h.joinMobile(sid, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newSID, err := h.rotateJoinLink(sid, mobileToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newSID == sid {
+		t.Fatal("rotated join link reused original sid")
+	}
+	if !h.exists(newSID) {
+		t.Fatal("rotated join link does not resolve")
+	}
+	linkEvent := readLinkEvent(t, "pc", pcCh)
+	if linkEvent.SID != newSID {
+		t.Fatalf("link event sid = %q, want %q", linkEvent.SID, newSID)
+	}
+	if _, _, err := h.joinMobile(newSID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	devices := readDevicesEvent(t, "pc", pcCh)
+	if len(devices.Devices) != 3 {
+		t.Fatalf("devices after rotated join = %d, want 3: %#v", len(devices.Devices), devices.Devices)
+	}
+}
+
 func TestExpiryCleanup(t *testing.T) {
 	h := newHub()
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
@@ -137,13 +223,9 @@ func TestPCBroadcastsClipboardToConnectedMobiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, ch := range map[string]chan event{"first": firstCh, "second": secondCh} {
-		select {
-		case got := <-ch:
-			if got.Type != "clipboard.text" || got.Text != "hello all" {
-				t.Fatalf("%s got wrong event %#v", name, got)
-			}
-		default:
-			t.Fatalf("%s mobile did not receive clipboard event", name)
+		got := readClipboardEvent(t, name, ch)
+		if got.Text != "hello all" {
+			t.Fatalf("%s got wrong text %q", name, got.Text)
 		}
 	}
 }
@@ -187,8 +269,8 @@ func TestPCReceivesDeviceListUpdates(t *testing.T) {
 			connected++
 		}
 	}
-	if connected != 2 {
-		t.Fatalf("connected devices = %d, want 2: %#v", connected, latest.Devices)
+	if connected != 3 {
+		t.Fatalf("connected devices = %d, want 3: %#v", connected, latest.Devices)
 	}
 }
 
@@ -245,10 +327,7 @@ func TestDesktopCanRenameAndDisconnectDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.hub.mu.Lock()
-	var deviceID string
-	for id := range a.hub.sessions[sid].devices {
-		deviceID = id
-	}
+	deviceID := findDeviceByTokenLocked(a.hub.sessions[sid], mobileToken).id
 	a.hub.mu.Unlock()
 	if deviceID == "" {
 		t.Fatal("missing joined device")
@@ -297,10 +376,26 @@ func TestIndexUsesNeutralClipboardUI(t *testing.T) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", "<h1>ClipBridge</h1>", "rotatingWord", "Send clipboard", "Source code", "localStorage", "/resume", "devicePane", "copyConnectURL", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, "<h1>ClipBridge</h1>", "Secure clipboard handoff", "Send clipboard", "Source code", "localStorage", "/resume", "devicePane", "devicePaneToggle", "mobileQr", "refreshJoinLink", "copyConnectURL", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}
+	}
+}
+
+func TestFaviconServed(t *testing.T) {
+	a := newApp()
+	req := httptest.NewRequest(http.MethodGet, "/favicon.svg", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("favicon status = %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "image/svg+xml; charset=utf-8" {
+		t.Fatalf("favicon content type = %q", got)
+	}
+	if !strings.Contains(w.Body.String(), `stroke="currentColor"`) {
+		t.Fatal("favicon does not use theme-aware currentColor stroke")
 	}
 }
 
@@ -356,17 +451,8 @@ func TestWebSocketClipboardRelayFromPCToMobile(t *testing.T) {
 		t.Fatalf("send status %d", sendRes.StatusCode)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, b, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var msg event
-	if err := json.Unmarshal(b, &msg); err != nil {
-		t.Fatal(err)
-	}
-	if msg.Type != "clipboard.text" || msg.Text != "hello mobile" {
+	msg := readClipboardWS(t, conn)
+	if msg.Text != "hello mobile" {
 		t.Fatalf("wrong message %#v", msg)
 	}
 }
@@ -442,6 +528,73 @@ func TestWebSocketClipboardRelay(t *testing.T) {
 				t.Fatalf("wrong text %q", msg.Text)
 			}
 			return
+		}
+	}
+}
+
+func readClipboardEvent(t *testing.T, name string, ch chan event) event {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-ch:
+			if got.Type == "clipboard.text" {
+				return got
+			}
+		case <-timer.C:
+			t.Fatalf("%s mobile did not receive clipboard event", name)
+		}
+	}
+}
+
+func readDevicesEvent(t *testing.T, name string, ch chan event) event {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-ch:
+			if got.Type == "devices" {
+				return got
+			}
+		case <-timer.C:
+			t.Fatalf("%s did not receive devices event", name)
+		}
+	}
+}
+
+func readLinkEvent(t *testing.T, name string, ch chan event) event {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-ch:
+			if got.Type == "link" {
+				return got
+			}
+		case <-timer.C:
+			t.Fatalf("%s did not receive link event", name)
+		}
+	}
+}
+
+func readClipboardWS(t *testing.T, conn *websocket.Conn) event {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		_, b, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var msg event
+		if err := json.Unmarshal(b, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type == "clipboard.text" {
+			return msg
 		}
 	}
 }

@@ -1,6 +1,6 @@
 # ClipBridge
 
-Small Go relay for sending clipboard text between two paired browser tabs.
+Small Go clipboard relay for handing text between browsers in the same private session.
 
 ## Run
 
@@ -8,22 +8,30 @@ Small Go relay for sending clipboard text between two paired browser tabs.
 go run .
 ```
 
-Open `http://localhost:8080`, scan the QR code with another device, then tap **Send clipboard** from either side.
+Open `http://localhost:8080`, then scan the QR code or copy the join link on another device. Any joined device can tap **Send clipboard** to relay its current clipboard text to the other connected devices.
 
-Pairing links use short word codes and the creating browser remembers its last code locally, so refreshing or reopening the page can resume the same session while the server still has it. Multiple devices can join the same code, and the desktop page can rename or disconnect them.
+## Features
+
+- Short word-code join links and QR codes.
+- Multi-device sessions. The first browser is `Device1`; later devices are `Device2`, `Device3`, and so on.
+- Shared device manager on every device. Desktop shows the pane on the right; mobile has a small arrow toggle.
+- Device rename and delete actions sync to all connected devices.
+- Join links can be rotated without kicking out existing devices.
+- The original browser remembers its last session locally and can resume while the server still has it.
 
 ## Deploy
 
 - Railway can run this as a single Go service.
 - Set `PUBLIC_BASE_URL=https://clipbridge.app` if the app is behind a proxy or custom domain.
-- Keep one instance for V1. Sessions are intentionally in memory and are deleted when the tab that created them disconnects.
+- Keep one instance for now. Sessions, device names, and join-link aliases are intentionally in memory and disappear when the process restarts or the session expires.
 
 ## Security Notes
 
 - No accounts, database, analytics, or third-party frontend assets.
 - Clipboard text is relayed in memory and is not logged or persisted.
 - Pairing auth tokens are HttpOnly cookies.
-- V1 does not support `?text=` shortcut URLs because URLs can leak through logs, history, and referrers.
+- Rotating a join link only creates a new invite URL for the same session. Existing devices stay connected.
+- `?text=` shortcut URLs are not supported because URLs can leak through logs, history, and referrers.
 
 ## Test
 

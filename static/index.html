@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ClipBridge</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <style nonce="{{NONCE}}">
     :root {
       color-scheme: light dark;
@@ -34,7 +35,7 @@
       min-height: calc(100vh - 44px);
       min-height: calc(100svh - 44px);
       display: grid;
-      grid-template-rows: auto auto 1fr auto auto auto;
+      grid-template-rows: auto auto minmax(12px, 1fr) auto minmax(12px, 1fr) auto auto;
       gap: 16px;
     }
     .app-header {
@@ -55,13 +56,6 @@
       font-size: 15px;
       font-weight: 650;
     }
-    #rotatingWord {
-      display: inline-block;
-      min-width: 52px;
-      color: #174ea6;
-      transition: opacity .6s ease;
-    }
-    #rotatingWord.swap { opacity: .4; }
     .screen {
       display: grid;
       gap: 14px;
@@ -200,11 +194,15 @@
       padding: 16px;
       align-self: start;
     }
+    .device-pane-toggle {
+      display: none;
+    }
     .pane-head {
       display: flex;
       justify-content: space-between;
       gap: 12px;
       align-items: baseline;
+      margin-top: 14px;
       margin-bottom: 12px;
     }
     .pane-head h2 {
@@ -218,6 +216,27 @@
       font-size: 13px;
       font-weight: 650;
       white-space: nowrap;
+    }
+    .join-link-row {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+    }
+    .refresh-link {
+      width: 42px;
+      min-height: 44px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      border: 1px solid #d9dbd2;
+      background: #f8f8f3;
+      color: #174ea6;
+    }
+    .refresh-link svg {
+      width: 19px;
+      height: 19px;
+      stroke-width: 2.2;
     }
     .copy-link {
       width: 100%;
@@ -251,11 +270,21 @@
     }
     .device-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 34px;
+      grid-template-columns: 10px minmax(0, 1fr) 34px;
       gap: 8px 10px;
       align-items: center;
       padding: 12px 0;
       border-bottom: 1px solid #e3e5dd;
+      cursor: pointer;
+    }
+    .device-status {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #dc2626;
+    }
+    .device-status.online {
+      background: #16a34a;
     }
     .device-name {
       min-width: 0;
@@ -266,7 +295,7 @@
       white-space: nowrap;
     }
     .device-meta {
-      grid-column: 1 / -1;
+      grid-column: 2 / -1;
       color: #5c6257;
       font-size: 12px;
       line-height: 1.35;
@@ -423,6 +452,50 @@
         border-radius: 8px 0 0 8px;
       }
     }
+    @media (max-width: 899px) {
+      body.mobile-mode {
+        overflow-x: hidden;
+      }
+      .device-pane-toggle {
+        position: absolute;
+        top: 10px;
+        right: 0;
+        z-index: 6;
+        width: 34px;
+        min-height: 40px;
+        padding: 0;
+        display: grid;
+        place-items: center;
+        border: 1px solid #d9dbd2;
+        border-right: 0;
+        border-radius: 8px 0 0 8px;
+        background: #fff;
+        color: #174ea6;
+      }
+      .device-pane-toggle svg {
+        width: 18px;
+        height: 18px;
+        stroke-width: 2.5;
+      }
+      body.mobile-mode .desktop-pane {
+        position: absolute;
+        top: 0;
+        right: 0;
+        z-index: 5;
+        width: min(86vw, 320px);
+        min-height: 100svh;
+        overflow-y: auto;
+        transform: translateX(100%);
+        transition: transform .18s ease;
+        border-top: 0;
+        border-right: 0;
+        border-bottom: 0;
+        border-radius: 8px 0 0 8px;
+      }
+      body.mobile-mode.pane-open .desktop-pane {
+        transform: translateX(0);
+      }
+    }
     @media (min-width: 1160px) {
       .app-layout.pc-mode {
         padding-right: 0;
@@ -432,7 +505,6 @@
     @media (prefers-color-scheme: dark) {
       :root { background: #11130f; color: #f4f4ef; }
       .tagline { color: #b9beb1; }
-      #rotatingWord { color: #8ab4f8; }
       .qr { background: #fff; border-color: #34372f; }
       .notice.success {
         border-color: #14532d;
@@ -465,6 +537,11 @@
         background: #1b1d18;
         border-color: #34372f;
       }
+      .device-pane-toggle {
+        background: #1b1d18;
+        border-color: #34372f;
+        color: #8ab4f8;
+      }
       .device-count,
       .device-meta,
       .empty-devices {
@@ -474,6 +551,11 @@
         background: #252820;
         border-color: #34372f;
         color: #f4f4ef;
+      }
+      .refresh-link {
+        background: #252820;
+        border-color: #34372f;
+        color: #8ab4f8;
       }
       .device-list,
       .device-row {
@@ -519,7 +601,7 @@
     <main>
       <header class="app-header">
         <h1>ClipBridge</h1>
-        <p class="tagline"><span id="rotatingWord">secure</span> clipboard handoff</p>
+        <p class="tagline">Secure clipboard handoff</p>
       </header>
 
       <section id="pc" class="screen hidden" aria-label="Clipboard">
@@ -530,6 +612,7 @@
       </section>
 
       <section id="mobile" class="screen hidden" aria-label="Clipboard">
+        <div id="mobileQrWrap" class="qr"><img id="mobileQr" alt="QR code for pairing"></div>
         <div id="mobileStatus" class="sr-only" role="status" aria-live="polite">Connecting...</div>
         <div id="mobileMessages" class="messages hidden" aria-label="Messages"></div>
       </section>
@@ -541,6 +624,8 @@
         <div id="notifStatus" class="notif-status"></div>
         <div id="notifData" class="notif-data"></div>
       </div>
+
+      <div class="spacer" aria-hidden="true"></div>
 
       <div id="pcActions" class="actions hidden">
         <button id="sendPC" class="send-button" type="button">
@@ -567,18 +652,32 @@
       </footer>
     </main>
 
+    <button id="devicePaneToggle" class="device-pane-toggle hidden" type="button" aria-label="Open devices" aria-expanded="false">
+      <svg id="devicePaneToggleIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+        <path d="m15 18-6-6 6-6"></path>
+      </svg>
+    </button>
+
     <aside id="devicePane" class="desktop-pane hidden" aria-label="Connected devices">
+      <div class="join-link-row">
+        <button id="refreshJoinLink" class="refresh-link" type="button" aria-label="New join link" title="New join link">
+          <svg viewBox="0 0 487.23 487.23" fill="currentColor" aria-hidden="true">
+            <path d="M55.323,203.641c15.664,0,29.813-9.405,35.872-23.854c25.017-59.604,83.842-101.61,152.42-101.61 c37.797,0,72.449,12.955,100.23,34.442l-21.775,3.371c-7.438,1.153-13.224,7.054-14.232,14.512 c-1.01,7.454,3.008,14.686,9.867,17.768l119.746,53.872c5.249,2.357,11.33,1.904,16.168-1.205 c4.83-3.114,7.764-8.458,7.796-14.208l0.621-131.943c0.042-7.506-4.851-14.144-12.024-16.332 c-7.185-2.188-14.947,0.589-19.104,6.837l-16.505,24.805C370.398,26.778,310.1,0,243.615,0C142.806,0,56.133,61.562,19.167,149.06 c-5.134,12.128-3.84,26.015,3.429,36.987C29.865,197.023,42.152,203.641,55.323,203.641z"></path>
+            <path d="M464.635,301.184c-7.27-10.977-19.558-17.594-32.728-17.594c-15.664,0-29.813,9.405-35.872,23.854 c-25.018,59.604-83.843,101.61-152.42,101.61c-37.798,0-72.45-12.955-100.232-34.442l21.776-3.369 c7.437-1.153,13.223-7.055,14.233-14.514c1.009-7.453-3.008-14.686-9.867-17.768L49.779,285.089 c-5.25-2.356-11.33-1.905-16.169,1.205c-4.829,3.114-7.764,8.458-7.795,14.207l-0.622,131.943 c-0.042,7.506,4.85,14.144,12.024,16.332c7.185,2.188,14.948-0.59,19.104-6.839l16.505-24.805 c44.004,43.32,104.303,70.098,170.788,70.098c100.811,0,187.481-61.561,224.446-149.059 C473.197,326.043,471.903,312.157,464.635,301.184z"></path>
+          </svg>
+        </button>
+        <button id="copyConnectURL" class="copy-link" type="button">
+          <span id="connectURL"></span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M8 8h11v11H8z"></path>
+            <path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"></path>
+          </svg>
+        </button>
+      </div>
       <div class="pane-head">
         <h2>Devices</h2>
         <span id="deviceCount" class="device-count">0 connected</span>
       </div>
-      <button id="copyConnectURL" class="copy-link" type="button">
-        <span id="connectURL"></span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-          <path d="M8 8h11v11H8z"></path>
-          <path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"></path>
-        </svg>
-      </button>
       <div id="deviceList" class="device-list"></div>
       <p id="emptyDevices" class="empty-devices">No devices connected.</p>
     </aside>
@@ -599,7 +698,7 @@
           <input id="deviceNameInput" type="text" maxlength="40" autocomplete="off">
         </label>
         <div class="modal-actions">
-          <button id="disconnectDevice" class="danger-button" type="button">Disconnect</button>
+          <button id="disconnectDevice" class="danger-button" type="button">Delete</button>
           <button id="saveDeviceName" type="button">Save</button>
         </div>
       </div>
@@ -616,6 +715,9 @@
     const emptyDevices = document.querySelector("#emptyDevices");
     const connectURL = document.querySelector("#connectURL");
     const copyConnectURL = document.querySelector("#copyConnectURL");
+    const refreshJoinLink = document.querySelector("#refreshJoinLink");
+    const devicePaneToggle = document.querySelector("#devicePaneToggle");
+    const devicePaneToggleIcon = document.querySelector("#devicePaneToggleIcon");
     const deviceModal = document.querySelector("#deviceModal");
     const closeDeviceModal = document.querySelector("#closeDeviceModal");
     const deviceNameInput = document.querySelector("#deviceNameInput");
@@ -627,21 +729,10 @@
     let linkURL = "";
     let joined = false;
     let activeDevice = null;
+    let pageRole = "";
 
     let pendingCopyText = "";
     let notifDismissTimer = null;
-
-    const rotateWords = ["secure", "fast", "private", "simple"];
-    const rotatingWord = document.querySelector("#rotatingWord");
-    let rotateIndex = 0;
-    setInterval(() => {
-      rotatingWord.classList.add("swap");
-      setTimeout(() => {
-        rotateIndex = (rotateIndex + 1) % rotateWords.length;
-        rotatingWord.textContent = rotateWords[rotateIndex];
-        rotatingWord.classList.remove("swap");
-      }, 600);
-    }, 6000);
 
     function showToast(message) {
       showNotice(message, "success", "");
@@ -666,36 +757,54 @@
       deviceCount.textContent = `${plural(connected, "device")} connected`;
       document.querySelector("#device").textContent = deviceCount.textContent;
       emptyDevices.classList.toggle("hidden", allDevices.length > 0);
-      document.querySelector("#pcActions").classList.toggle("hidden", connected === 0);
+      document.querySelector("#pcActions").classList.toggle("hidden", pageRole !== "pc" || allDevices.length < 2);
       deviceList.replaceChildren(...allDevices.map(deviceRow));
     }
 
     function deviceRow(device) {
       const row = document.createElement("div");
       row.className = "device-row";
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-label", `Edit ${device.name || "Device"}`);
+      row.onclick = () => openDeviceModal(device);
+      row.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openDeviceModal(device);
+        }
+      };
+
+      const status = document.createElement("span");
+      status.className = `device-status ${device.connected ? "online" : "offline"}`;
+      status.setAttribute("aria-label", device.connected ? "Connected" : "Disconnected");
 
       const name = document.createElement("div");
       name.className = "device-name";
-      name.textContent = device.name || "Mobile";
+      name.textContent = device.name || "Device";
 
       const edit = document.createElement("button");
       edit.className = "edit-device-button";
       edit.type = "button";
-      edit.setAttribute("aria-label", `Edit ${device.name || "Mobile"}`);
+      edit.setAttribute("aria-label", `Edit ${device.name || "Device"}`);
+      edit.title = `Edit ${device.name || "Device"}`;
       edit.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m12 20 9-9-4-4-9 9-2 6 6-2z"></path><path d="m15 7 4 4"></path></svg>`;
-      edit.onclick = () => openDeviceModal(device);
+      edit.onclick = (event) => {
+        event.stopPropagation();
+        openDeviceModal(device);
+      };
 
       const meta = document.createElement("div");
       meta.className = "device-meta";
-      meta.textContent = `${device.connected ? "Online" : "Offline"} - ${formatConnectedAt(device.connectedAt)}`;
+      meta.textContent = formatConnectedAt(device.connectedAt);
 
-      row.append(name, edit, meta);
+      row.append(status, name, edit, meta);
       return row;
     }
 
     function openDeviceModal(device) {
       activeDevice = device;
-      deviceNameInput.value = device.name || "Mobile";
+      deviceNameInput.value = device.name || "Device";
       deviceModal.classList.remove("hidden");
       requestAnimationFrame(() => {
         deviceNameInput.focus();
@@ -743,6 +852,36 @@
       if (event.key === "Escape" && !deviceModal.classList.contains("hidden")) closeModal();
     });
 
+    function setPaneOpen(open) {
+      document.body.classList.toggle("pane-open", open);
+      devicePaneToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      devicePaneToggle.setAttribute("aria-label", open ? "Close devices" : "Open devices");
+      devicePaneToggleIcon.innerHTML = open
+        ? `<path d="m9 18 6-6-6-6"></path>`
+        : `<path d="m15 18-6-6 6-6"></path>`;
+    }
+
+    devicePaneToggle.onclick = () => setPaneOpen(!document.body.classList.contains("pane-open"));
+
+    function syncJoinedPaneLayout() {
+      if (pageRole !== "mobile") return;
+      const wide = window.matchMedia("(min-width: 900px)").matches;
+      document.body.classList.toggle("pc-mode", wide);
+      appLayout.classList.toggle("pc-mode", wide);
+      devicePaneToggle.classList.toggle("hidden", wide);
+      if (wide) setPaneOpen(false);
+    }
+
+    window.addEventListener("resize", syncJoinedPaneLayout);
+
+    function setJoinLink(joinSID, qrURL, url) {
+      if (!joinSID) return;
+      linkURL = url || `${location.origin}/s/${joinSID}`;
+      connectURL.textContent = linkURL;
+      document.querySelector("#qr").src = qrURL || `/qr/${encodeURIComponent(joinSID)}.png`;
+      document.querySelector("#mobileQr").src = qrURL || `/qr/${encodeURIComponent(joinSID)}.png`;
+    }
+
     copyConnectURL.onclick = async () => {
       if (!linkURL) return;
       try {
@@ -750,6 +889,16 @@
         showNotice("Link copied", "success", linkURL);
       } catch (_) {
         showNotice("Copy blocked", "error", linkURL);
+      }
+    };
+
+    refreshJoinLink.onclick = async () => {
+      try {
+        const data = await postJSON(`/api/session/${sid}/link`);
+        setJoinLink(data.sid, data.qrURL, data.linkURL);
+        showNotice("New join link ready", "success", data.linkURL || linkURL);
+      } catch (err) {
+        showNotice(err.message, "error", "");
       }
     };
 
@@ -920,21 +1069,22 @@
     }
 
     async function startPC() {
+      pageRole = "pc";
       pc.classList.remove("hidden");
       document.body.classList.add("pc-mode");
+      document.body.classList.remove("mobile-mode", "pane-open");
       appLayout.classList.add("pc-mode");
+      appLayout.classList.remove("mobile-mode");
       devicePane.classList.remove("hidden");
+      devicePaneToggle.classList.add("hidden");
       document.querySelector("#mobileActions").classList.add("hidden");
       const status = document.querySelector("#pcStatus");
-      const qr = document.querySelector("#qr");
       const messages = document.querySelector("#pcMessages");
 
       const data = await pcSession();
       sid = data.sid;
-      linkURL = data.linkURL || `${location.origin}/s/${sid}`;
-      connectURL.textContent = linkURL;
       rememberSID(sid);
-      qr.src = data.qrURL;
+      setJoinLink(data.sid, data.qrURL, data.linkURL);
       status.textContent = "Scan QR code to connect.";
       renderDevices([]);
 
@@ -949,6 +1099,10 @@
           status.textContent = (event.devices || []).some((device) => device.connected) ? "Ready." : "Scan QR code to connect.";
           return;
         }
+        if (event.type === "link") {
+          setJoinLink(event.sid);
+          return;
+        }
         if (event.type !== "clipboard.text") return;
         receiveText(status, messages, event.text || "");
       };
@@ -957,7 +1111,7 @@
     }
 
     function deviceLabel() {
-      return "Device";
+      return "";
     }
 
     async function joinMobile() {
@@ -968,13 +1122,20 @@
     }
 
     async function startMobile() {
+      pageRole = "mobile";
       mobile.classList.remove("hidden");
       document.body.classList.remove("pc-mode");
+      document.body.classList.add("mobile-mode");
+      setPaneOpen(false);
       appLayout.classList.remove("pc-mode");
-      devicePane.classList.add("hidden");
+      appLayout.classList.add("mobile-mode");
+      devicePane.classList.remove("hidden");
+      devicePaneToggle.classList.remove("hidden");
       document.querySelector("#pcActions").classList.add("hidden");
+      syncJoinedPaneLayout();
       const status = document.querySelector("#mobileStatus");
       const messages = document.querySelector("#mobileMessages");
+      setJoinLink(sid);
       joinMobile()
         .then(() => {
           const ws = new WebSocket(websocketURL("mobile"));
@@ -983,6 +1144,14 @@
           ws.onerror = () => status.textContent = "Connection failed.";
           ws.onmessage = (message) => {
             const event = JSON.parse(message.data);
+            if (event.type === "devices") {
+              renderDevices(event.devices || []);
+              return;
+            }
+            if (event.type === "link") {
+              setJoinLink(event.sid);
+              return;
+            }
             if (event.type === "clipboard.text") receiveText(status, messages, event.text || "");
           };
         })
@@ -998,10 +1167,14 @@
       startMobile();
     } else {
       startPC().catch((err) => {
+        pageRole = "pc";
         pc.classList.remove("hidden");
         document.body.classList.add("pc-mode");
+        document.body.classList.remove("mobile-mode", "pane-open");
         appLayout.classList.add("pc-mode");
+        appLayout.classList.remove("mobile-mode");
         devicePane.classList.remove("hidden");
+        devicePaneToggle.classList.add("hidden");
         document.querySelector("#mobileActions").classList.add("hidden");
         document.querySelector("#pcStatus").textContent = err.message;
         showNotice(err.message, "error", "");

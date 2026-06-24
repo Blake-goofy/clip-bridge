@@ -49,44 +49,11 @@
     }
     .muted { color: #666a61; font-size: 14px; }
     .messages {
-      min-height: 180px;
-      max-height: 46vh;
-      overflow: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      padding: 2px;
+      display: none !important;
     }
     .bubble {
-      width: fit-content;
-      max-width: 86%;
-      height: auto;
-      min-height: 0;
-      display: grid;
-      gap: 5px;
-      border: 1px solid #d9dbd2;
-      border-radius: 8px;
-      padding: 10px 12px;
-      color: #171717;
-      background: #f4f5f0;
-      font-weight: 500;
-      text-align: left;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
+      display: none !important;
     }
-    .bubble.sent {
-      align-self: flex-end;
-      border-color: #174ea6;
-      background: #174ea6;
-      color: #fff;
-    }
-    .bubble.received { align-self: flex-start; }
-    .stamp {
-      font-size: 12px;
-      color: #767a70;
-      font-weight: 500;
-    }
-    .bubble.sent .stamp { color: rgba(255, 255, 255, .72); }
     .actions {
       display: flex;
       gap: 10px;
@@ -128,6 +95,100 @@
       transition: opacity .15s ease;
     }
     #toast.show { opacity: 1; }
+
+    #sendPC, #sendClipboard {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      z-index: 1000;
+      min-width: 90px;
+      min-height: 48px;
+      border-radius: 24px;
+      box-shadow: 0 4px 16px rgba(23, 78, 166, 0.35);
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Centered Notification Overlay */
+    .notif-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    .notif-overlay.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .notif-card {
+      background: #ffffff;
+      border: 1px solid #d9dbd2;
+      border-radius: 16px;
+      padding: 32px;
+      width: min(90vw, 440px);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.18);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      text-align: center;
+      transform: scale(0.9);
+      transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.15);
+    }
+    .notif-overlay.show .notif-card {
+      transform: scale(1);
+    }
+    .notif-icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      transition: all 0.3s ease;
+    }
+    /* Success Green Checkmark state */
+    .notif-card.success .notif-icon {
+      background: #e6f4ea;
+      color: #137333;
+    }
+    /* Pending Active/Focus State */
+    .notif-card.pending .notif-icon {
+      background: #fef7e0;
+      color: #b06000;
+    }
+    .notif-status {
+      font-size: 20px;
+      font-weight: 700;
+      color: #171717;
+    }
+    .notif-data {
+      font-size: 14px;
+      color: #171717;
+      background: #f4f5f0;
+      border: 1px solid #d9dbd2;
+      border-radius: 8px;
+      padding: 12px;
+      width: 100%;
+      max-height: 180px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      text-align: left;
+    }
+
     @media (prefers-color-scheme: dark) {
       :root { background: #11130f; color: #f4f4ef; }
       .panel { background: #1b1d18; border-color: #34372f; box-shadow: none; }
@@ -135,8 +196,35 @@
       button.secondary { background: #34372f; color: #f4f4ef; }
       .bubble { background: #252820; color: #f4f4ef; border-color: #3c4037; }
       .bubble.sent { background: #8ab4f8; border-color: #8ab4f8; color: #11130f; }
-      .stamp { color: #a7ada0; }
-      .bubble.sent .stamp { color: rgba(17, 19, 15, .68); }
+
+      #sendPC, #sendClipboard {
+        box-shadow: 0 4px 16px rgba(138, 180, 248, 0.25);
+      }
+
+      .notif-overlay {
+        background: rgba(0, 0, 0, 0.6);
+      }
+      .notif-card {
+        background: #1b1d18;
+        border-color: #34372f;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+      }
+      .notif-card.success .notif-icon {
+        background: #0f3d1e;
+        color: #81c995;
+      }
+      .notif-card.pending .notif-icon {
+        background: #443105;
+        color: #fdd663;
+      }
+      .notif-status {
+        color: #f4f4ef;
+      }
+      .notif-data {
+        background: #252820;
+        border-color: #3c4037;
+        color: #f4f4ef;
+      }
     }
   </style>
 </head>
@@ -163,6 +251,15 @@
   </main>
   <div id="toast" role="status" aria-live="polite"></div>
 
+  <!-- Centered Notification Overlay -->
+  <div id="copyNotif" class="notif-overlay">
+    <div class="notif-card">
+      <div id="notifIcon" class="notif-icon"></div>
+      <div id="notifStatus" class="notif-status"></div>
+      <div id="notifData" class="notif-data"></div>
+    </div>
+  </div>
+
   <script nonce="{{NONCE}}">
     const pc = document.querySelector("#pc");
     const mobile = document.querySelector("#mobile");
@@ -171,12 +268,69 @@
     let sid = sessionMatch ? sessionMatch[1] : "";
     let joined = false;
 
+    let pendingCopyText = "";
+    let notifDismissTimer = null;
+
     function showToast(message) {
       toast.textContent = message;
       toast.classList.add("show");
       clearTimeout(showToast.timer);
       showToast.timer = setTimeout(() => toast.classList.remove("show"), 1800);
     }
+
+    function showClipboardNotification(text, isPending) {
+      const overlay = document.querySelector("#copyNotif");
+      const card = overlay.querySelector(".notif-card");
+      const icon = document.querySelector("#notifIcon");
+      const statusText = document.querySelector("#notifStatus");
+      const data = document.querySelector("#notifData");
+
+      if (notifDismissTimer) {
+        clearTimeout(notifDismissTimer);
+        notifDismissTimer = null;
+      }
+
+      data.textContent = text || "";
+
+      if (isPending) {
+        card.classList.remove("success");
+        card.classList.add("pending");
+        icon.textContent = "⏳";
+        statusText.textContent = "Click / focus page to copy";
+      } else {
+        card.classList.remove("pending");
+        card.classList.add("success");
+        icon.textContent = "✔";
+        statusText.textContent = "Copied to Clipboard";
+
+        notifDismissTimer = setTimeout(() => {
+          overlay.classList.remove("show");
+        }, 2500);
+      }
+
+      overlay.classList.add("show");
+    }
+
+    async function attemptPendingCopy() {
+      if (pendingCopyText) {
+        const textToCopy = pendingCopyText;
+        try {
+          await navigator.clipboard.writeText(textToCopy);
+          pendingCopyText = "";
+          showClipboardNotification(textToCopy, false);
+        } catch (err) {
+          console.error("Copy failed:", err);
+        }
+      }
+    }
+
+    window.addEventListener("focus", attemptPendingCopy);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        attemptPendingCopy();
+      }
+    });
+    document.addEventListener("click", attemptPendingCopy);
 
     async function postJSON(url, body) {
       const res = await fetch(url, {
@@ -209,11 +363,8 @@
 
       const body = document.createElement("span");
       body.textContent = text || "";
-      const stamp = document.createElement("span");
-      stamp.className = "stamp";
-      stamp.textContent = timeLabel(new Date());
 
-      bubble.append(body, stamp);
+      bubble.append(body);
       bubble.onclick = async () => {
         try {
           await navigator.clipboard.writeText(text || "");
@@ -237,10 +388,13 @@
         if (!document.hasFocus()) throw new Error("tab is not active");
         await navigator.clipboard.writeText(text);
         status.textContent = "Received and copied.";
+        pendingCopyText = "";
+        showClipboardNotification(text, false);
       } catch (_) {
         status.textContent = "Received.";
+        pendingCopyText = text;
+        showClipboardNotification(text, true);
       }
-      showToast("Received");
     }
 
     async function sendClipboard(status, messages) {

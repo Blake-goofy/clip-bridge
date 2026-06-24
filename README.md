@@ -8,7 +8,9 @@ Small Go relay for sending clipboard text between two paired browser tabs.
 go run .
 ```
 
-Open `http://localhost:8080`, scan the QR code with another device, then tap **Send** from either side.
+Open `http://localhost:8080`, scan the QR code with another device, then tap **Send clipboard** from either side.
+
+Pairing links use short word codes and the creating browser remembers its last code locally, so refreshing or reopening the page can resume the same session while the server still has it. Multiple devices can join the same code, and the desktop page can rename or disconnect them.
 
 ## Deploy
 

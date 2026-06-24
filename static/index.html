@@ -8,30 +8,64 @@
     :root {
       color-scheme: light dark;
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f7f7f4;
+      background: #f8f8f3;
       color: #171717;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 24px;
+      min-height: 100svh;
+      padding: 22px;
+      position: relative;
     }
-    main {
-      width: min(100%, 520px);
+    .app-layout {
+      width: min(100%, 980px);
+      min-height: calc(100vh - 44px);
+      min-height: calc(100svh - 44px);
+      margin: 0 auto;
       display: grid;
+      grid-template-columns: minmax(0, 520px);
+      justify-content: center;
       gap: 18px;
     }
-    .panel {
-      border: 1px solid #d9dbd2;
-      border-radius: 8px;
-      background: #ffffff;
-      padding: 18px;
+    main {
+      width: 100%;
+      min-height: calc(100vh - 44px);
+      min-height: calc(100svh - 44px);
+      display: grid;
+      grid-template-rows: auto auto 1fr auto auto auto;
+      gap: 16px;
+    }
+    .app-header {
+      display: grid;
+      gap: 12px;
+      text-align: center;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 8vw, 42px);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+    .tagline {
+      min-height: 22px;
+      margin: 0;
+      color: #5c6257;
+      font-size: 15px;
+      font-weight: 650;
+    }
+    #rotatingWord {
+      display: inline-block;
+      min-width: 52px;
+      color: #174ea6;
+      transition: opacity .6s ease;
+    }
+    #rotatingWord.swap { opacity: .4; }
+    .screen {
       display: grid;
       gap: 14px;
-      box-shadow: 0 1px 8px rgba(20, 20, 15, .06);
+      align-content: start;
     }
     .qr {
       width: min(100%, 288px);
@@ -43,244 +77,716 @@
       background: #fff;
     }
     .qr img { display: block; width: 100%; height: 100%; }
-    .status {
-      min-height: 24px;
-      font-weight: 650;
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
     }
-    .muted { color: #666a61; font-size: 14px; }
     .messages {
       display: none !important;
     }
     .bubble {
       display: none !important;
     }
+    .spacer { min-height: 12px; }
+    .notice {
+      min-height: 102px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px 12px;
+      align-items: start;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity .16s ease, transform .16s ease;
+    }
+    .notice.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .notice.success {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+    .notice.pending {
+      border-color: #fde68a;
+      background: #fffbeb;
+    }
+    .notice.error {
+      border-color: #fecaca;
+      background: #fff1f2;
+    }
+    .notif-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .notice.success .notif-icon {
+      background: #dcfce7;
+      color: #22c55e;
+    }
+    .notice.pending .notif-icon {
+      background: #fef3c7;
+      color: #b45309;
+    }
+    .notice.error .notif-icon {
+      background: #ffe4e6;
+      color: #be123c;
+    }
+    .notif-status {
+      align-self: center;
+      font-size: 15px;
+      font-weight: 750;
+      color: #171717;
+    }
+    .notif-data {
+      grid-column: 1 / -1;
+      max-height: 110px;
+      overflow-y: auto;
+      color: #3f463b;
+      font-size: 13px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .actions {
       display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
+      justify-content: center;
     }
     button {
-      min-height: 44px;
+      min-height: 50px;
       border: 0;
       border-radius: 8px;
-      padding: 0 14px;
+      padding: 0 20px;
       background: #174ea6;
       color: #fff;
       font: inherit;
-      font-weight: 700;
+      font-weight: 750;
       cursor: pointer;
-    }
-    button.secondary {
-      background: #e8ebe3;
-      color: #171717;
     }
     button:disabled {
       cursor: not-allowed;
       opacity: .55;
     }
-    .hidden { display: none !important; }
-    #toast {
-      position: fixed;
-      left: 50%;
-      bottom: 22px;
-      transform: translateX(-50%);
-      max-width: calc(100vw - 32px);
-      padding: 10px 12px;
-      border-radius: 8px;
-      background: #171717;
-      color: #fff;
-      font-size: 14px;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity .15s ease;
-    }
-    #toast.show { opacity: 1; }
-
-    #sendPC, #sendClipboard {
-      position: fixed;
-      right: 24px;
-      bottom: 24px;
-      z-index: 1000;
-      min-width: 90px;
-      min-height: 48px;
-      border-radius: 24px;
-      box-shadow: 0 4px 16px rgba(23, 78, 166, 0.35);
-      padding: 0 20px;
-      display: flex;
+    .send-button {
+      width: min(100%, 340px);
+      display: inline-flex;
       align-items: center;
       justify-content: center;
+      gap: 10px;
     }
-
-    /* Centered Notification Overlay */
-    .notif-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background: rgba(0, 0, 0, 0.4);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 2000;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.3s ease;
+    .send-button svg {
+      width: 20px;
+      height: 20px;
+      stroke-width: 2.5;
     }
-    .notif-overlay.show {
-      opacity: 1;
-      pointer-events: auto;
-    }
-    .notif-card {
-      background: #ffffff;
-      border: 1px solid #d9dbd2;
-      border-radius: 16px;
-      padding: 32px;
-      width: min(90vw, 440px);
-      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.18);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 16px;
-      text-align: center;
-      transform: scale(0.9);
-      transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.15);
-    }
-    .notif-overlay.show .notif-card {
-      transform: scale(1);
-    }
-    .notif-icon {
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 36px;
-      transition: all 0.3s ease;
-    }
-    /* Success Green Checkmark state */
-    .notif-card.success .notif-icon {
-      background: #e6f4ea;
-      color: #137333;
-    }
-    /* Pending Active/Focus State */
-    .notif-card.pending .notif-icon {
-      background: #fef7e0;
-      color: #b06000;
-    }
-    .notif-status {
-      font-size: 20px;
-      font-weight: 700;
-      color: #171717;
-    }
-    .notif-data {
-      font-size: 14px;
-      color: #171717;
-      background: #f4f5f0;
-      border: 1px solid #d9dbd2;
-      border-radius: 8px;
-      padding: 12px;
+    .desktop-pane {
       width: 100%;
-      max-height: 180px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
+      border: 1px solid #d9dbd2;
+      border-radius: 8px;
+      background: #fff;
+      padding: 16px;
+      align-self: start;
+    }
+    .pane-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 12px;
+    }
+    .pane-head h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    .device-count {
+      color: #5c6257;
+      font-size: 13px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .copy-link {
+      width: 100%;
+      min-height: 44px;
+      justify-content: space-between;
+      gap: 10px;
+      border: 1px solid #d9dbd2;
+      background: #f8f8f3;
+      color: #171717;
+      display: flex;
+      align-items: center;
       text-align: left;
+    }
+    .copy-link span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .copy-link svg {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+    }
+    .device-list {
+      display: grid;
+      margin-top: 14px;
+      border-top: 1px solid #e3e5dd;
+    }
+    .device-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 34px;
+      gap: 8px 10px;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #e3e5dd;
+    }
+    .device-name {
+      min-width: 0;
+      color: #171717;
+      font-weight: 650;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .device-meta {
+      grid-column: 1 / -1;
+      color: #5c6257;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .edit-device-button {
+      width: 34px;
+      min-height: 34px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #5c6257;
+      opacity: 0;
+      transition: opacity .12s ease, background-color .12s ease, border-color .12s ease;
+    }
+    .device-row:hover .edit-device-button,
+    .edit-device-button:focus-visible {
+      opacity: 1;
+    }
+    .edit-device-button:hover,
+    .edit-device-button:focus-visible {
+      border-color: #d9dbd2;
+      background: #f8f8f3;
+      color: #174ea6;
+    }
+    .edit-device-button svg {
+      width: 17px;
+      height: 17px;
+      stroke-width: 2.4;
+    }
+    .empty-devices {
+      margin: 12px 0 0;
+      color: #5c6257;
+      font-size: 13px;
+    }
+    .modal {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      display: grid;
+      place-items: center;
+      padding: 22px;
+      min-height: 100%;
+      background: rgba(23, 23, 23, .34);
+    }
+    .modal-card {
+      width: min(100%, 360px);
+      border: 1px solid #d9dbd2;
+      border-radius: 8px;
+      background: #fff;
+      padding: 16px;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .modal-head h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+    .icon-button {
+      width: 34px;
+      min-height: 34px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #5c6257;
+    }
+    .icon-button:hover,
+    .icon-button:focus-visible {
+      border-color: #d9dbd2;
+      background: #f8f8f3;
+      color: #171717;
+    }
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+      stroke-width: 2.4;
+    }
+    .modal-field {
+      display: grid;
+      gap: 6px;
+      color: #5c6257;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .modal-field input {
+      min-height: 42px;
+      border: 1px solid #d9dbd2;
+      border-radius: 6px;
+      padding: 0 10px;
+      background: #fff;
+      color: #171717;
+      font: inherit;
+      font-weight: 650;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .danger-button {
+      background: #fff1f2;
+      color: #be123c;
+      border: 1px solid #fecaca;
+    }
+    .hidden { display: none !important; }
+    footer {
+      padding-top: 2px;
+      text-align: center;
+      font-size: 13px;
+    }
+    footer a {
+      color: #5c6257;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+    footer a:hover { color: #174ea6; }
+
+    @media (min-width: 900px) {
+      body.pc-mode {
+        padding-right: 0;
+      }
+      .app-layout.pc-mode {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        padding-right: 342px;
+        position: relative;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 520px) minmax(0, 1fr);
+        justify-content: stretch;
+      }
+      .app-layout.pc-mode main {
+        grid-column: 2;
+      }
+      .app-layout.pc-mode .desktop-pane {
+        position: absolute;
+        top: -22px;
+        right: 0;
+        width: 320px;
+        height: 100svh;
+        overflow-y: auto;
+        border-top: 0;
+        border-right: 0;
+        border-bottom: 0;
+        border-radius: 8px 0 0 8px;
+      }
+    }
+    @media (min-width: 1160px) {
+      .app-layout.pc-mode {
+        padding-right: 0;
+      }
     }
 
     @media (prefers-color-scheme: dark) {
       :root { background: #11130f; color: #f4f4ef; }
-      .panel { background: #1b1d18; border-color: #34372f; box-shadow: none; }
-      .muted { color: #b9beb1; }
-      button.secondary { background: #34372f; color: #f4f4ef; }
-      .bubble { background: #252820; color: #f4f4ef; border-color: #3c4037; }
-      .bubble.sent { background: #8ab4f8; border-color: #8ab4f8; color: #11130f; }
-
-      #sendPC, #sendClipboard {
-        box-shadow: 0 4px 16px rgba(138, 180, 248, 0.25);
+      .tagline { color: #b9beb1; }
+      #rotatingWord { color: #8ab4f8; }
+      .qr { background: #fff; border-color: #34372f; }
+      .notice.success {
+        border-color: #14532d;
+        background: #052e16;
       }
-
-      .notif-overlay {
-        background: rgba(0, 0, 0, 0.6);
+      .notice.pending {
+        border-color: #854d0e;
+        background: #422006;
       }
-      .notif-card {
+      .notice.error {
+        border-color: #881337;
+        background: #4c0519;
+      }
+      .notice.success .notif-icon {
+        background: #166534;
+        color: #86efac;
+      }
+      .notice.pending .notif-icon {
+        background: #713f12;
+        color: #fde68a;
+      }
+      .notice.error .notif-icon {
+        background: #881337;
+        color: #fecdd3;
+      }
+      .notif-status { color: #f4f4ef; }
+      .notif-data { color: #d7dccf; }
+      button { background: #8ab4f8; color: #11130f; }
+      .desktop-pane {
         background: #1b1d18;
         border-color: #34372f;
-        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
       }
-      .notif-card.success .notif-icon {
-        background: #0f3d1e;
-        color: #81c995;
+      .device-count,
+      .device-meta,
+      .empty-devices {
+        color: #b9beb1;
       }
-      .notif-card.pending .notif-icon {
-        background: #443105;
-        color: #fdd663;
-      }
-      .notif-status {
-        color: #f4f4ef;
-      }
-      .notif-data {
+      .copy-link {
         background: #252820;
-        border-color: #3c4037;
+        border-color: #34372f;
         color: #f4f4ef;
       }
+      .device-list,
+      .device-row {
+        border-color: #34372f;
+      }
+      .device-name { color: #f4f4ef; }
+      .edit-device-button:hover,
+      .edit-device-button:focus-visible,
+      .icon-button:hover,
+      .icon-button:focus-visible {
+        background: #252820;
+        border-color: #34372f;
+        color: #8ab4f8;
+      }
+      .modal {
+        background: rgba(0, 0, 0, .58);
+      }
+      .modal-card {
+        background: #1b1d18;
+        border-color: #34372f;
+      }
+      .modal-head h2,
+      .modal-field input {
+        color: #f4f4ef;
+      }
+      .modal-field { color: #b9beb1; }
+      .modal-field input {
+        background: #11130f;
+        border-color: #34372f;
+      }
+      .danger-button {
+        background: #4c0519;
+        border-color: #881337;
+        color: #fecdd3;
+      }
+      footer a { color: #b9beb1; }
+      footer a:hover { color: #8ab4f8; }
     }
   </style>
 </head>
 <body>
-  <main>
-    <section id="pc" class="panel hidden" aria-label="Clipboard">
-      <div id="qrWrap" class="qr"><img id="qr" alt="QR code for pairing"></div>
-      <div id="pcStatus" class="status">Creating session...</div>
-      <div id="device" class="muted">No device connected.</div>
-      <div id="pcMessages" class="messages hidden" aria-label="Messages"></div>
+  <div id="appLayout" class="app-layout">
+    <main>
+      <header class="app-header">
+        <h1>ClipBridge</h1>
+        <p class="tagline"><span id="rotatingWord">secure</span> clipboard handoff</p>
+      </header>
+
+      <section id="pc" class="screen hidden" aria-label="Clipboard">
+        <div id="qrWrap" class="qr"><img id="qr" alt="QR code for pairing"></div>
+        <div id="pcStatus" class="sr-only" role="status" aria-live="polite">Creating session...</div>
+        <div id="device" class="sr-only">No devices connected.</div>
+        <div id="pcMessages" class="messages hidden" aria-label="Messages"></div>
+      </section>
+
+      <section id="mobile" class="screen hidden" aria-label="Clipboard">
+        <div id="mobileStatus" class="sr-only" role="status" aria-live="polite">Connecting...</div>
+        <div id="mobileMessages" class="messages hidden" aria-label="Messages"></div>
+      </section>
+
+      <div class="spacer" aria-hidden="true"></div>
+
+      <div id="copyNotif" class="notice" role="status" aria-live="polite">
+        <div id="notifIcon" class="notif-icon"></div>
+        <div id="notifStatus" class="notif-status"></div>
+        <div id="notifData" class="notif-data"></div>
+      </div>
+
       <div id="pcActions" class="actions hidden">
-        <button id="sendPC" type="button">Send</button>
-        <button id="newSession" class="secondary" type="button">New Session</button>
+        <button id="sendPC" class="send-button" type="button">
+          <span>Send clipboard</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M5 12h14"></path>
+            <path d="m13 6 6 6-6 6"></path>
+          </svg>
+        </button>
       </div>
-    </section>
 
-    <section id="mobile" class="panel hidden" aria-label="Clipboard">
-      <div id="mobileStatus" class="status">Connecting...</div>
-      <div class="actions">
-        <button id="sendClipboard" type="button">Send</button>
+      <div id="mobileActions" class="actions">
+        <button id="sendClipboard" class="send-button" type="button">
+          <span>Send clipboard</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M5 12h14"></path>
+            <path d="m13 6 6 6-6 6"></path>
+          </svg>
+        </button>
       </div>
-      <div id="mobileMessages" class="messages hidden" aria-label="Messages"></div>
-    </section>
-  </main>
-  <div id="toast" role="status" aria-live="polite"></div>
 
-  <!-- Centered Notification Overlay -->
-  <div id="copyNotif" class="notif-overlay">
-    <div class="notif-card">
-      <div id="notifIcon" class="notif-icon"></div>
-      <div id="notifStatus" class="notif-status"></div>
-      <div id="notifData" class="notif-data"></div>
+      <footer>
+        <a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
+      </footer>
+    </main>
+
+    <aside id="devicePane" class="desktop-pane hidden" aria-label="Connected devices">
+      <div class="pane-head">
+        <h2>Devices</h2>
+        <span id="deviceCount" class="device-count">0 connected</span>
+      </div>
+      <button id="copyConnectURL" class="copy-link" type="button">
+        <span id="connectURL"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path d="M8 8h11v11H8z"></path>
+          <path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"></path>
+        </svg>
+      </button>
+      <div id="deviceList" class="device-list"></div>
+      <p id="emptyDevices" class="empty-devices">No devices connected.</p>
+    </aside>
+
+    <div id="deviceModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deviceModalTitle">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2 id="deviceModalTitle">Edit device</h2>
+          <button id="closeDeviceModal" class="icon-button" type="button" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="M18 6 6 18"></path>
+              <path d="m6 6 12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <label class="modal-field">
+          Name
+          <input id="deviceNameInput" type="text" maxlength="40" autocomplete="off">
+        </label>
+        <div class="modal-actions">
+          <button id="disconnectDevice" class="danger-button" type="button">Disconnect</button>
+          <button id="saveDeviceName" type="button">Save</button>
+        </div>
+      </div>
     </div>
   </div>
 
   <script nonce="{{NONCE}}">
     const pc = document.querySelector("#pc");
     const mobile = document.querySelector("#mobile");
-    const toast = document.querySelector("#toast");
+    const appLayout = document.querySelector("#appLayout");
+    const devicePane = document.querySelector("#devicePane");
+    const deviceCount = document.querySelector("#deviceCount");
+    const deviceList = document.querySelector("#deviceList");
+    const emptyDevices = document.querySelector("#emptyDevices");
+    const connectURL = document.querySelector("#connectURL");
+    const copyConnectURL = document.querySelector("#copyConnectURL");
+    const deviceModal = document.querySelector("#deviceModal");
+    const closeDeviceModal = document.querySelector("#closeDeviceModal");
+    const deviceNameInput = document.querySelector("#deviceNameInput");
+    const saveDeviceName = document.querySelector("#saveDeviceName");
+    const disconnectDevice = document.querySelector("#disconnectDevice");
     const sessionMatch = location.pathname.match(/^\/s\/([^/]+)$/);
+    const storageKey = "clipbridge.sid";
     let sid = sessionMatch ? sessionMatch[1] : "";
+    let linkURL = "";
     let joined = false;
+    let activeDevice = null;
 
     let pendingCopyText = "";
     let notifDismissTimer = null;
 
+    const rotateWords = ["secure", "fast", "private", "simple"];
+    const rotatingWord = document.querySelector("#rotatingWord");
+    let rotateIndex = 0;
+    setInterval(() => {
+      rotatingWord.classList.add("swap");
+      setTimeout(() => {
+        rotateIndex = (rotateIndex + 1) % rotateWords.length;
+        rotatingWord.textContent = rotateWords[rotateIndex];
+        rotatingWord.classList.remove("swap");
+      }, 600);
+    }, 6000);
+
     function showToast(message) {
-      toast.textContent = message;
-      toast.classList.add("show");
-      clearTimeout(showToast.timer);
-      showToast.timer = setTimeout(() => toast.classList.remove("show"), 1800);
+      showNotice(message, "success", "");
     }
 
-    function showClipboardNotification(text, isPending) {
-      const overlay = document.querySelector("#copyNotif");
-      const card = overlay.querySelector(".notif-card");
+    function plural(count, word) {
+      return `${count} ${word}${count === 1 ? "" : "s"}`;
+    }
+
+    function formatConnectedAt(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "Connected date unavailable";
+      return `Connected ${new Intl.DateTimeFormat([], {
+        dateStyle: "medium",
+        timeStyle: "short"
+      }).format(date)}`;
+    }
+
+    function renderDevices(devices) {
+      const allDevices = Array.isArray(devices) ? devices : [];
+      const connected = allDevices.filter((d) => d.connected).length;
+      deviceCount.textContent = `${plural(connected, "device")} connected`;
+      document.querySelector("#device").textContent = deviceCount.textContent;
+      emptyDevices.classList.toggle("hidden", allDevices.length > 0);
+      document.querySelector("#pcActions").classList.toggle("hidden", connected === 0);
+      deviceList.replaceChildren(...allDevices.map(deviceRow));
+    }
+
+    function deviceRow(device) {
+      const row = document.createElement("div");
+      row.className = "device-row";
+
+      const name = document.createElement("div");
+      name.className = "device-name";
+      name.textContent = device.name || "Mobile";
+
+      const edit = document.createElement("button");
+      edit.className = "edit-device-button";
+      edit.type = "button";
+      edit.setAttribute("aria-label", `Edit ${device.name || "Mobile"}`);
+      edit.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m12 20 9-9-4-4-9 9-2 6 6-2z"></path><path d="m15 7 4 4"></path></svg>`;
+      edit.onclick = () => openDeviceModal(device);
+
+      const meta = document.createElement("div");
+      meta.className = "device-meta";
+      meta.textContent = `${device.connected ? "Online" : "Offline"} - ${formatConnectedAt(device.connectedAt)}`;
+
+      row.append(name, edit, meta);
+      return row;
+    }
+
+    function openDeviceModal(device) {
+      activeDevice = device;
+      deviceNameInput.value = device.name || "Mobile";
+      deviceModal.classList.remove("hidden");
+      requestAnimationFrame(() => {
+        deviceNameInput.focus();
+        deviceNameInput.select();
+      });
+    }
+
+    function closeModal() {
+      activeDevice = null;
+      deviceModal.classList.add("hidden");
+    }
+
+    async function renameActiveDevice() {
+      if (!activeDevice) return;
+      try {
+        await postJSON(`/api/session/${sid}/devices/${encodeURIComponent(activeDevice.id)}/name`, { name: deviceNameInput.value });
+        showNotice("Device renamed", "success", "");
+        closeModal();
+      } catch (err) {
+        showNotice(err.message, "error", "");
+      }
+    }
+
+    async function disconnectActiveDevice() {
+      if (!activeDevice) return;
+      try {
+        await postJSON(`/api/session/${sid}/devices/${encodeURIComponent(activeDevice.id)}/disconnect`);
+        showNotice("Device disconnected", "success", "");
+        closeModal();
+      } catch (err) {
+        showNotice(err.message, "error", "");
+      }
+    }
+
+    closeDeviceModal.onclick = closeModal;
+    saveDeviceName.onclick = renameActiveDevice;
+    disconnectDevice.onclick = disconnectActiveDevice;
+    deviceNameInput.onkeydown = (event) => {
+      if (event.key === "Enter") renameActiveDevice();
+    };
+    deviceModal.onclick = (event) => {
+      if (event.target === deviceModal) closeModal();
+    };
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !deviceModal.classList.contains("hidden")) closeModal();
+    });
+
+    copyConnectURL.onclick = async () => {
+      if (!linkURL) return;
+      try {
+        await navigator.clipboard.writeText(linkURL);
+        showNotice("Link copied", "success", linkURL);
+      } catch (_) {
+        showNotice("Copy blocked", "error", linkURL);
+      }
+    };
+
+    function rememberedSID() {
+      try {
+        return localStorage.getItem(storageKey) || "";
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function rememberSID(value) {
+      try {
+        if (value) {
+          localStorage.setItem(storageKey, value);
+        } else {
+          localStorage.removeItem(storageKey);
+        }
+      } catch (_) {}
+    }
+
+    async function pcSession() {
+      const saved = rememberedSID();
+      if (saved) {
+        try {
+          return await postJSON(`/api/session/${encodeURIComponent(saved)}/resume`);
+        } catch (_) {
+          rememberSID("");
+        }
+      }
+      const data = await postJSON("/api/session");
+      rememberSID(data.sid);
+      return data;
+    }
+
+    function showNotice(message, state, text) {
+      const notice = document.querySelector("#copyNotif");
       const icon = document.querySelector("#notifIcon");
       const statusText = document.querySelector("#notifStatus");
       const data = document.querySelector("#notifData");
@@ -290,25 +796,25 @@
         notifDismissTimer = null;
       }
 
+      notice.classList.remove("success", "pending", "error");
+      notice.classList.add(state, "show");
+      icon.textContent = state === "pending" ? "!" : state === "error" ? "!" : "✓";
+      statusText.textContent = message;
       data.textContent = text || "";
 
-      if (isPending) {
-        card.classList.remove("success");
-        card.classList.add("pending");
-        icon.textContent = "⏳";
-        statusText.textContent = "Click / focus page to copy";
-      } else {
-        card.classList.remove("pending");
-        card.classList.add("success");
-        icon.textContent = "✔";
-        statusText.textContent = "Copied to Clipboard";
-
+      if (state !== "pending") {
         notifDismissTimer = setTimeout(() => {
-          overlay.classList.remove("show");
+          notice.classList.remove("show");
         }, 2500);
       }
+    }
 
-      overlay.classList.add("show");
+    function showClipboardNotification(text, isPending) {
+      if (isPending) {
+        showNotice("Click or focus the page to copy", "pending", text);
+      } else {
+        showNotice("Copied to clipboard", "success", text);
+      }
     }
 
     async function attemptPendingCopy() {
@@ -350,10 +856,6 @@
       return res.json();
     }
 
-    function timeLabel(date) {
-      return new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" }).format(date);
-    }
-
     function addMessage(list, direction, text) {
       list.classList.remove("hidden");
       const bubble = document.createElement("button");
@@ -370,7 +872,7 @@
           await navigator.clipboard.writeText(text || "");
           showToast("Copied");
         } catch (_) {
-          showToast("Copy blocked");
+          showNotice("Copy blocked", "error", "");
         }
       };
       list.append(bubble);
@@ -403,43 +905,48 @@
         text = await navigator.clipboard.readText();
       } catch (_) {
         status.textContent = "Clipboard access blocked.";
+        showNotice("Clipboard access blocked", "error", "");
         return;
       }
       try {
         await postJSON(`/api/session/${sid}/clipboard`, { text });
         status.textContent = "Sent.";
         addMessage(messages, "sent", text);
-        showToast("Sent");
+        showNotice("Sent", "success", "");
       } catch (err) {
         status.textContent = err.message;
+        showNotice(err.message, "error", "");
       }
     }
 
     async function startPC() {
       pc.classList.remove("hidden");
+      document.body.classList.add("pc-mode");
+      appLayout.classList.add("pc-mode");
+      devicePane.classList.remove("hidden");
+      document.querySelector("#mobileActions").classList.add("hidden");
       const status = document.querySelector("#pcStatus");
-      const device = document.querySelector("#device");
       const qr = document.querySelector("#qr");
-      const qrWrap = document.querySelector("#qrWrap");
-      const actions = document.querySelector("#pcActions");
       const messages = document.querySelector("#pcMessages");
 
-      const data = await postJSON("/api/session");
+      const data = await pcSession();
       sid = data.sid;
+      linkURL = data.linkURL || `${location.origin}/s/${sid}`;
+      connectURL.textContent = linkURL;
+      rememberSID(sid);
       qr.src = data.qrURL;
       status.textContent = "Scan QR code to connect.";
+      renderDevices([]);
 
       const ws = new WebSocket(websocketURL("pc"));
       ws.onopen = () => status.textContent = "Scan QR code to connect.";
-      ws.onclose = () => status.textContent = "Session closed. Create a new session to reconnect.";
-      ws.onerror = () => status.textContent = "Connection failed. Create a new session to retry.";
+      ws.onclose = () => status.textContent = "Session closed. Refresh the page to reconnect.";
+      ws.onerror = () => status.textContent = "Connection failed. Refresh the page to retry.";
       ws.onmessage = async (message) => {
         const event = JSON.parse(message.data);
-        if (event.type === "presence") {
-          device.textContent = event.connected ? "Device connected." : "No device connected.";
-          status.textContent = event.connected ? "Ready." : "Scan QR code to connect.";
-          qrWrap.classList.toggle("hidden", event.connected);
-          actions.classList.toggle("hidden", !event.connected);
+        if (event.type === "devices") {
+          renderDevices(event.devices || []);
+          status.textContent = (event.devices || []).some((device) => device.connected) ? "Ready." : "Scan QR code to connect.";
           return;
         }
         if (event.type !== "clipboard.text") return;
@@ -447,7 +954,6 @@
       };
 
       document.querySelector("#sendPC").onclick = () => sendClipboard(status, messages);
-      document.querySelector("#newSession").onclick = () => location.href = "/";
     }
 
     function deviceLabel() {
@@ -463,6 +969,10 @@
 
     async function startMobile() {
       mobile.classList.remove("hidden");
+      document.body.classList.remove("pc-mode");
+      appLayout.classList.remove("pc-mode");
+      devicePane.classList.add("hidden");
+      document.querySelector("#pcActions").classList.add("hidden");
       const status = document.querySelector("#mobileStatus");
       const messages = document.querySelector("#mobileMessages");
       joinMobile()
@@ -476,7 +986,10 @@
             if (event.type === "clipboard.text") receiveText(status, messages, event.text || "");
           };
         })
-        .catch((err) => status.textContent = err.message);
+        .catch((err) => {
+          status.textContent = err.message;
+          showNotice(err.message, "error", "");
+        });
 
       document.querySelector("#sendClipboard").onclick = () => sendClipboard(status, messages);
     }
@@ -486,7 +999,12 @@
     } else {
       startPC().catch((err) => {
         pc.classList.remove("hidden");
+        document.body.classList.add("pc-mode");
+        appLayout.classList.add("pc-mode");
+        devicePane.classList.remove("hidden");
+        document.querySelector("#mobileActions").classList.add("hidden");
         document.querySelector("#pcStatus").textContent = err.message;
+        showNotice(err.message, "error", "");
       });
     }
   </script>

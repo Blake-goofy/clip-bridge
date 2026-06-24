@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,20 +25,19 @@ import (
 
 const (
 	maxTextBytes = 256 * 1024
-	unpairedTTL  = 10 * time.Minute
-	idleTTL      = 30 * time.Minute
+	unpairedTTL  = 30 * 24 * time.Hour
+	idleTTL      = 30 * 24 * time.Hour
 )
 
 //go:embed static/index.html
 var indexHTML string
 
 var (
-	errNotFound      = errors.New("session not found")
-	errUnauthorized  = errors.New("unauthorized")
-	errAlreadyPaired = errors.New("session already paired")
-	errPCGone        = errors.New("no device connected")
-	errBusy          = errors.New("device is busy")
-	errConflict      = errors.New("device is already connected")
+	errNotFound     = errors.New("session not found")
+	errUnauthorized = errors.New("unauthorized")
+	errPCGone       = errors.New("no device connected")
+	errBusy         = errors.New("device is busy")
+	errConflict     = errors.New("device is already connected")
 )
 
 type app struct {
@@ -51,22 +51,36 @@ type hub struct {
 }
 
 type session struct {
-	id         string
-	pcHash     [32]byte
-	mobileHash [32]byte
-	mobileSet  bool
-	device     string
-	createdAt  time.Time
-	lastSeen   time.Time
-	pcSend     chan event
-	mobileSend chan event
+	id        string
+	pcHash    [32]byte
+	createdAt time.Time
+	lastSeen  time.Time
+	pcSend    chan event
+	devices   map[string]*device
+}
+
+type device struct {
+	id          string
+	tokenHash   [32]byte
+	name        string
+	connectedAt time.Time
+	lastSeen    time.Time
+	send        chan event
+}
+
+type deviceView struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Connected   bool   `json:"connected"`
+	ConnectedAt string `json:"connectedAt"`
 }
 
 type event struct {
-	Type      string `json:"type"`
-	Device    string `json:"device,omitempty"`
-	Connected bool   `json:"connected,omitempty"`
-	Text      string `json:"text,omitempty"`
+	Type     string       `json:"type"`
+	DeviceID string       `json:"deviceId,omitempty"`
+	Device   string       `json:"device,omitempty"`
+	Devices  []deviceView `json:"devices,omitempty"`
+	Text     string       `json:"text,omitempty"`
 }
 
 func main() {
@@ -132,8 +146,9 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	setTokenCookie(w, r, pcCookieName(sid), pcToken, unpairedTTL)
 	writeJSON(w, http.StatusCreated, map[string]string{
-		"sid":   sid,
-		"qrURL": publicBaseURL(r) + "/qr/" + sid + ".png",
+		"sid":     sid,
+		"qrURL":   publicBaseURL(r) + "/qr/" + sid + ".png",
+		"linkURL": publicBaseURL(r) + "/s/" + sid,
 	})
 }
 
@@ -223,19 +238,87 @@ func (a *app) serveWebSocket(w http.ResponseWriter, r *http.Request, connect fun
 func (a *app) handleSessionPost(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/session/")
 	parts := strings.Split(rest, "/")
-	if len(parts) != 2 {
+	if len(parts) != 2 && len(parts) != 4 {
 		http.NotFound(w, r)
 		return
 	}
 	sid, action := parts[0], parts[1]
 	switch action {
 	case "join":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
 		a.handleJoin(w, r, sid)
+	case "resume":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		a.handleResume(w, r, sid)
 	case "clipboard":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
 		a.handleClipboard(w, r, sid)
+	case "devices":
+		if len(parts) != 4 {
+			http.NotFound(w, r)
+			return
+		}
+		a.handleDeviceAction(w, r, sid, parts[2], parts[3])
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (a *app) handleDeviceAction(w http.ResponseWriter, r *http.Request, sid, deviceID, action string) {
+	pcToken, ok := tokenCookie(r, pcCookieName(sid))
+	if !ok || a.hub.verifyPC(sid, pcToken) != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	switch action {
+	case "name":
+		var req struct {
+			Name string `json:"name"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1024)
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if err := a.hub.renameDevice(sid, pcToken, deviceID, cleanDevice(req.Name)); err != nil {
+			writeHubError(w, err)
+			return
+		}
+	case "disconnect":
+		if err := a.hub.removeDevice(sid, pcToken, deviceID); err != nil {
+			writeHubError(w, err)
+			return
+		}
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (a *app) handleResume(w http.ResponseWriter, r *http.Request, sid string) {
+	pcToken, ok := tokenCookie(r, pcCookieName(sid))
+	if !ok || a.hub.verifyPC(sid, pcToken) != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	setTokenCookie(w, r, pcCookieName(sid), pcToken, idleTTL)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"sid":     sid,
+		"qrURL":   publicBaseURL(r) + "/qr/" + sid + ".png",
+		"linkURL": publicBaseURL(r) + "/s/" + sid,
+	})
 }
 
 func (a *app) handleJoin(w http.ResponseWriter, r *http.Request, sid string) {
@@ -248,11 +331,7 @@ func (a *app) handleJoin(w http.ResponseWriter, r *http.Request, sid string) {
 	existing, _ := tokenCookie(r, mobileCookieName(sid))
 	mobileToken, setCookie, err := a.hub.joinMobile(sid, existing, cleanDevice(req.Device))
 	if err != nil {
-		status := http.StatusNotFound
-		if errors.Is(err, errAlreadyPaired) {
-			status = http.StatusConflict
-		}
-		writeError(w, status, err.Error())
+		writeHubError(w, err)
 		return
 	}
 	if setCookie {
@@ -298,6 +377,21 @@ func (a *app) handleClipboard(w http.ResponseWriter, r *http.Request, sid string
 	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
 }
 
+func writeHubError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errUnauthorized):
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+	case errors.Is(err, errPCGone):
+		writeError(w, http.StatusGone, "no device connected")
+	case errors.Is(err, errBusy):
+		writeError(w, http.StatusServiceUnavailable, "device is busy")
+	case errors.Is(err, errConflict):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusNotFound, "session not found")
+	}
+}
+
 func (h *hub) createSession() (string, string, error) {
 	pcToken, err := randomToken(32)
 	if err != nil {
@@ -308,7 +402,7 @@ func (h *hub) createSession() (string, string, error) {
 	now := h.now()
 	h.cleanupLocked(now)
 	for i := 0; i < 5; i++ {
-		sid, err := randomToken(18)
+		sid, err := randomSessionID()
 		if err != nil {
 			return "", "", err
 		}
@@ -320,6 +414,7 @@ func (h *hub) createSession() (string, string, error) {
 			pcHash:    tokenHash(pcToken),
 			createdAt: now,
 			lastSeen:  now,
+			devices:   make(map[string]*device),
 		}
 		return sid, pcToken, nil
 	}
@@ -359,7 +454,7 @@ func (h *hub) verifyMobile(sid, token string) error {
 	if !ok {
 		return errNotFound
 	}
-	if !s.mobileSet || !sameToken(s.mobileHash, token) {
+	if findDeviceByTokenLocked(s, token) == nil {
 		return errUnauthorized
 	}
 	return nil
@@ -383,9 +478,7 @@ func (h *hub) connectPC(sid, token string) (chan event, error) {
 	ch := make(chan event, 16)
 	s.pcSend = ch
 	s.lastSeen = now
-	if s.mobileSend != nil {
-		_ = sendToPCLocked(s, event{Type: "presence", Device: s.device, Connected: true})
-	}
+	_ = sendToPCLocked(s, devicesEventLocked(s))
 	return ch, nil
 }
 
@@ -396,14 +489,12 @@ func (h *hub) disconnectPC(sid string, ch chan event) {
 	if !ok || s.pcSend != ch {
 		return
 	}
-	delete(h.sessions, sid)
+	s.pcSend = nil
+	s.lastSeen = h.now()
 	close(ch)
-	if s.mobileSend != nil {
-		close(s.mobileSend)
-	}
 }
 
-func (h *hub) joinMobile(sid, existingToken, device string) (mobileToken string, setCookie bool, err error) {
+func (h *hub) joinMobile(sid, existingToken, deviceName string) (mobileToken string, setCookie bool, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := h.now()
@@ -412,21 +503,32 @@ func (h *hub) joinMobile(sid, existingToken, device string) (mobileToken string,
 	if !ok {
 		return "", false, errNotFound
 	}
-	if s.mobileSet {
-		if existingToken != "" && sameToken(s.mobileHash, existingToken) {
-			s.lastSeen = now
-			return "", false, nil
+	if d := findDeviceByTokenLocked(s, existingToken); d != nil {
+		d.lastSeen = now
+		if deviceName != "" {
+			d.name = deviceName
 		}
-		return "", false, errAlreadyPaired
+		s.lastSeen = now
+		_ = sendToPCLocked(s, devicesEventLocked(s))
+		return "", false, nil
 	}
 	token, err := randomToken(32)
 	if err != nil {
 		return "", false, err
 	}
-	s.mobileHash = tokenHash(token)
-	s.mobileSet = true
-	s.device = device
+	deviceID, err := randomToken(9)
+	if err != nil {
+		return "", false, err
+	}
+	s.devices[deviceID] = &device{
+		id:          deviceID,
+		tokenHash:   tokenHash(token),
+		name:        deviceName,
+		connectedAt: now,
+		lastSeen:    now,
+	}
 	s.lastSeen = now
+	_ = sendToPCLocked(s, devicesEventLocked(s))
 	return token, true, nil
 }
 
@@ -439,16 +541,18 @@ func (h *hub) connectMobile(sid, token string) (chan event, error) {
 	if !ok {
 		return nil, errNotFound
 	}
-	if !s.mobileSet || !sameToken(s.mobileHash, token) {
+	d := findDeviceByTokenLocked(s, token)
+	if d == nil {
 		return nil, errUnauthorized
 	}
-	if s.mobileSend != nil {
+	if d.send != nil {
 		return nil, errConflict
 	}
 	ch := make(chan event, 16)
-	s.mobileSend = ch
+	d.send = ch
+	d.lastSeen = now
 	s.lastSeen = now
-	_ = sendToPCLocked(s, event{Type: "presence", Device: s.device, Connected: true})
+	_ = sendToPCLocked(s, devicesEventLocked(s))
 	return ch, nil
 }
 
@@ -456,12 +560,18 @@ func (h *hub) disconnectMobile(sid string, ch chan event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s, ok := h.sessions[sid]
-	if !ok || s.mobileSend != ch {
+	if !ok {
 		return
 	}
-	s.mobileSend = nil
-	close(ch)
-	_ = sendToPCLocked(s, event{Type: "presence", Device: s.device, Connected: false})
+	for _, d := range s.devices {
+		if d.send == ch {
+			d.send = nil
+			d.lastSeen = h.now()
+			close(ch)
+			_ = sendToPCLocked(s, devicesEventLocked(s))
+			return
+		}
+	}
 }
 
 func (h *hub) relayClipboardToPC(sid, mobileToken, text string) error {
@@ -473,9 +583,11 @@ func (h *hub) relayClipboardToPC(sid, mobileToken, text string) error {
 	if !ok {
 		return errNotFound
 	}
-	if !s.mobileSet || !sameToken(s.mobileHash, mobileToken) {
+	d := findDeviceByTokenLocked(s, mobileToken)
+	if d == nil {
 		return errUnauthorized
 	}
+	d.lastSeen = now
 	s.lastSeen = now
 	return sendToPCLocked(s, event{Type: "clipboard.text", Text: text})
 }
@@ -493,24 +605,106 @@ func (h *hub) relayClipboardToMobile(sid, pcToken, text string) error {
 		return errUnauthorized
 	}
 	s.lastSeen = now
-	return sendToMobileLocked(s, event{Type: "clipboard.text", Text: text})
+	return sendToMobilesLocked(s, event{Type: "clipboard.text", Text: text})
+}
+
+func (h *hub) renameDevice(sid, pcToken, deviceID, name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	h.cleanupLocked(now)
+	s, ok := h.sessions[sid]
+	if !ok {
+		return errNotFound
+	}
+	if !sameToken(s.pcHash, pcToken) {
+		return errUnauthorized
+	}
+	d, ok := s.devices[deviceID]
+	if !ok {
+		return errNotFound
+	}
+	d.name = name
+	d.lastSeen = now
+	s.lastSeen = now
+	_ = sendToPCLocked(s, devicesEventLocked(s))
+	return nil
+}
+
+func (h *hub) removeDevice(sid, pcToken, deviceID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	h.cleanupLocked(now)
+	s, ok := h.sessions[sid]
+	if !ok {
+		return errNotFound
+	}
+	if !sameToken(s.pcHash, pcToken) {
+		return errUnauthorized
+	}
+	d, ok := s.devices[deviceID]
+	if !ok {
+		return errNotFound
+	}
+	delete(s.devices, deviceID)
+	if d.send != nil {
+		close(d.send)
+	}
+	s.lastSeen = now
+	_ = sendToPCLocked(s, devicesEventLocked(s))
+	return nil
 }
 
 func (h *hub) cleanupLocked(now time.Time) {
 	// ponytail: in-memory sessions are single-process only; use Redis/pubsub if Railway needs multiple instances.
 	for sid, s := range h.sessions {
-		unpairedExpired := !s.mobileSet && now.Sub(s.createdAt) > unpairedTTL
+		unpairedExpired := len(s.devices) == 0 && now.Sub(s.createdAt) > unpairedTTL
 		idleExpired := now.Sub(s.lastSeen) > idleTTL
 		if unpairedExpired || idleExpired {
 			delete(h.sessions, sid)
 			if s.pcSend != nil {
 				close(s.pcSend)
 			}
-			if s.mobileSend != nil {
-				close(s.mobileSend)
+			for _, d := range s.devices {
+				if d.send != nil {
+					close(d.send)
+				}
 			}
 		}
 	}
+}
+
+func findDeviceByTokenLocked(s *session, token string) *device {
+	if token == "" {
+		return nil
+	}
+	for _, d := range s.devices {
+		if sameToken(d.tokenHash, token) {
+			return d
+		}
+	}
+	return nil
+}
+
+func devicesEventLocked(s *session) event {
+	return event{Type: "devices", Devices: deviceViewsLocked(s)}
+}
+
+func deviceViewsLocked(s *session) []deviceView {
+	devices := make([]deviceView, 0, len(s.devices))
+	for _, d := range s.devices {
+		devices = append(devices, deviceView{
+			ID:          d.id,
+			Name:        d.name,
+			Connected:   d.send != nil,
+			ConnectedAt: d.connectedAt.Format(time.RFC3339),
+		})
+	}
+	sort.Slice(devices, func(i, j int) bool {
+		return devices[i].ConnectedAt < devices[j].ConnectedAt
+	})
+	return devices
 }
 
 func sendToPCLocked(s *session, msg event) error {
@@ -525,16 +719,27 @@ func sendToPCLocked(s *session, msg event) error {
 	}
 }
 
-func sendToMobileLocked(s *session, msg event) error {
-	if s.mobileSend == nil {
-		return errPCGone
+func sendToMobilesLocked(s *session, msg event) error {
+	sent := 0
+	busy := 0
+	for _, d := range s.devices {
+		if d.send == nil {
+			continue
+		}
+		select {
+		case d.send <- msg:
+			sent++
+		default:
+			busy++
+		}
 	}
-	select {
-	case s.mobileSend <- msg:
+	if sent > 0 {
 		return nil
-	default:
+	}
+	if busy > 0 {
 		return errBusy
 	}
+	return errPCGone
 }
 
 func randomToken(n int) (string, error) {

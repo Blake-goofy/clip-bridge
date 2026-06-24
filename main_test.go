@@ -470,6 +470,43 @@ func TestOversizedPayloadRejected(t *testing.T) {
 	}
 }
 
+func TestImageClipboardPayloadRelayAndValidation(t *testing.T) {
+	a := newApp()
+	sid, pcToken, err := a.hub.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcCh, err := a.hub.connectPC(sid, pcToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mobileToken, _, err := a.hub.joinMobile(sid, "", "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pngData := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+	req := httptest.NewRequest(http.MethodPost, "/api/session/"+sid+"/clipboard", strings.NewReader(`{"mime":"image/png","data":"`+pngData+`"}`))
+	req.AddCookie(&http.Cookie{Name: mobileCookieName(sid), Value: mobileToken})
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("image send status = %d, body %s", w.Code, w.Body.String())
+	}
+	got := readImageEvent(t, "pc", pcCh)
+	if got.MIME != "image/png" || got.Data != pngData {
+		t.Fatalf("wrong image event %#v", got)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/session/"+sid+"/clipboard", strings.NewReader(`{"mime":"image/jpeg","data":"/9j/"}`))
+	req.AddCookie(&http.Cookie{Name: mobileCookieName(sid), Value: mobileToken})
+	w = httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("jpeg send status = %d, want 400", w.Code)
+	}
+}
+
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
 	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "position: fixed", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout"} {
 		if strings.Contains(indexHTML, old) {
@@ -644,6 +681,22 @@ func readClipboardEvent(t *testing.T, name string, ch chan event) event {
 			}
 		case <-timer.C:
 			t.Fatalf("%s mobile did not receive clipboard event", name)
+		}
+	}
+}
+
+func readImageEvent(t *testing.T, name string, ch chan event) event {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-ch:
+			if got.Type == "clipboard.image" {
+				return got
+			}
+		case <-timer.C:
+			t.Fatalf("%s did not receive clipboard image event", name)
 		}
 	}
 }

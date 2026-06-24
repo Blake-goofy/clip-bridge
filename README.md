@@ -1,6 +1,6 @@
 # ClipBridge
 
-Small Go clipboard relay for handing text between browsers in the same private session.
+Small Go clipboard relay for handing text and PNG images between browsers in the same private session.
 
 ## Run
 
@@ -8,7 +8,7 @@ Small Go clipboard relay for handing text between browsers in the same private s
 go run .
 ```
 
-Open `http://localhost:8080`, then scan the QR code or copy the join link on another device. Any joined device can tap **Send clipboard** to relay its current clipboard text to the other connected devices.
+Open `http://localhost:8080`, then scan the QR code or copy the join link on another device. Any joined device can tap **Send clipboard** to relay its current clipboard text or PNG image to the other connected devices.
 
 ## Features
 
@@ -18,6 +18,7 @@ Open `http://localhost:8080`, then scan the QR code or copy the join link on ano
 - Device rename and delete actions sync to all connected devices.
 - Join links can be rotated without kicking out existing devices.
 - The original browser remembers its last session locally and can resume while the server still has it.
+- Clipboard images are relayed as PNG payloads with a 5 MiB decoded size limit.
 
 ## Deploy
 
@@ -28,7 +29,7 @@ Open `http://localhost:8080`, then scan the QR code or copy the join link on ano
 ## Security Notes
 
 - No accounts, database, analytics, or third-party frontend assets.
-- Clipboard text is relayed in memory and is not logged or persisted.
+- Clipboard text and images are relayed in memory and are not logged or persisted.
 - Pairing auth tokens are HttpOnly cookies.
 - Rotating a join link only creates a new invite URL for the same session. Existing devices stay connected.
 - `?text=` shortcut URLs are not supported because URLs can leak through logs, history, and referrers.

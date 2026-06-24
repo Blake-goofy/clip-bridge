@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image/png"
 	"log"
 	"net"
 	"net/http"
@@ -25,9 +27,12 @@ import (
 )
 
 const (
-	maxTextBytes = 256 * 1024
-	unpairedTTL  = 30 * 24 * time.Hour
-	idleTTL      = 30 * 24 * time.Hour
+	maxTextBytes             = 256 * 1024
+	maxImageBytes            = 5 * 1024 * 1024
+	maxImageBase64Bytes      = ((maxImageBytes + 2) / 3) * 4
+	maxClipboardRequestBytes = maxImageBase64Bytes + 4096
+	unpairedTTL              = 30 * 24 * time.Hour
+	idleTTL                  = 30 * 24 * time.Hour
 )
 
 //go:embed static/index.html
@@ -89,6 +94,8 @@ type event struct {
 	Device   string       `json:"device,omitempty"`
 	Devices  []deviceView `json:"devices,omitempty"`
 	Text     string       `json:"text,omitempty"`
+	MIME     string       `json:"mime,omitempty"`
+	Data     string       `json:"data,omitempty"`
 }
 
 func main() {
@@ -394,21 +401,23 @@ func (a *app) handleJoin(w http.ResponseWriter, r *http.Request, sid string) {
 func (a *app) handleClipboard(w http.ResponseWriter, r *http.Request, sid string) {
 	var req struct {
 		Text string `json:"text"`
+		MIME string `json:"mime"`
+		Data string `json:"data"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxTextBytes+1024)
+	r.Body = http.MaxBytesReader(w, r.Body, maxClipboardRequestBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if len([]byte(req.Text)) > maxTextBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, "text is too large")
+	msg, ok := clipboardEvent(w, req.Text, req.MIME, req.Data)
+	if !ok {
 		return
 	}
 	err := errUnauthorized
 	if token, ok := a.deviceToken(r, sid); ok {
-		err = a.hub.relayClipboard(sid, token, req.Text)
+		err = a.hub.relayClipboardEvent(sid, token, msg)
 	}
 	if err != nil {
 		switch {
@@ -424,6 +433,43 @@ func (a *app) handleClipboard(w http.ResponseWriter, r *http.Request, sid string
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+}
+
+func clipboardEvent(w http.ResponseWriter, text, mime, data string) (event, bool) {
+	if mime != "" || data != "" {
+		// ponytail: browsers reliably expose clipboard images as PNG; add conversion if native JPEG/WebP clipboard support becomes common.
+		if mime != "image/png" {
+			writeError(w, http.StatusBadRequest, "unsupported image type")
+			return event{}, false
+		}
+		if data == "" {
+			writeError(w, http.StatusBadRequest, "missing image data")
+			return event{}, false
+		}
+		if len(data) > maxImageBase64Bytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "image is too large")
+			return event{}, false
+		}
+		decoded, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid image data")
+			return event{}, false
+		}
+		if len(decoded) > maxImageBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "image is too large")
+			return event{}, false
+		}
+		if _, err := png.DecodeConfig(bytes.NewReader(decoded)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid image data")
+			return event{}, false
+		}
+		return event{Type: "clipboard.image", MIME: mime, Data: data}, true
+	}
+	if len([]byte(text)) > maxTextBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "text is too large")
+		return event{}, false
+	}
+	return event{Type: "clipboard.text", Text: text}, true
 }
 
 func writeHubError(w http.ResponseWriter, err error) {
@@ -683,6 +729,10 @@ func (h *hub) relayClipboardToMobile(sid, pcToken, text string) error {
 }
 
 func (h *hub) relayClipboard(sid, token, text string) error {
+	return h.relayClipboardEvent(sid, token, event{Type: "clipboard.text", Text: text})
+}
+
+func (h *hub) relayClipboardEvent(sid, token string, msg event) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := h.now()
@@ -697,7 +747,7 @@ func (h *hub) relayClipboard(sid, token, text string) error {
 	}
 	d.lastSeen = now
 	s.lastSeen = now
-	return sendToOtherDevicesLocked(s, d, event{Type: "clipboard.text", Text: text})
+	return sendToOtherDevicesLocked(s, d, msg)
 }
 
 func (h *hub) renameDevice(sid, token, deviceID, name string) error {

@@ -758,6 +758,7 @@
     let pageRole = "";
 
     let pendingCopyText = "";
+    let pendingCopyImage = null;
     let notifDismissTimer = null;
 
     function showToast(message) {
@@ -993,6 +994,14 @@
       }
     }
 
+    function imageSummary(image) {
+      const data = image && image.data ? image.data : "";
+      const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+      const bytes = Math.max(0, Math.floor(data.length * 3 / 4) - padding);
+      const size = bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.ceil(bytes / 1024))} KB`;
+      return `PNG image, ${size}`;
+    }
+
     function showClipboardNotification(text, isPending) {
       if (isPending) {
         showNotice("Click or focus the page to copy", "pending", text);
@@ -1001,12 +1010,36 @@
       }
     }
 
+    function showImageClipboardNotification(image, isPending) {
+      if (isPending) {
+        showNotice("Click or focus the page to copy image", "pending", imageSummary(image));
+      } else {
+        showNotice("Image copied to clipboard", "success", imageSummary(image));
+      }
+    }
+
+    function clearPendingCopy() {
+      pendingCopyText = "";
+      pendingCopyImage = null;
+    }
+
     async function attemptPendingCopy() {
+      if (pendingCopyImage) {
+        const imageToCopy = pendingCopyImage;
+        try {
+          await writeImageClipboard(imageToCopy);
+          clearPendingCopy();
+          showImageClipboardNotification(imageToCopy, false);
+        } catch (err) {
+          console.error("Image copy failed:", err);
+        }
+        return;
+      }
       if (pendingCopyText) {
         const textToCopy = pendingCopyText;
         try {
           await navigator.clipboard.writeText(textToCopy);
-          pendingCopyText = "";
+          clearPendingCopy();
           showClipboardNotification(textToCopy, false);
         } catch (err) {
           console.error("Copy failed:", err);
@@ -1068,22 +1101,95 @@
       return `${scheme}//${location.host}/ws/${sid}/${role}`;
     }
 
+    async function blobToBase64(blob) {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const chunkSize = 0x8000;
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+      return btoa(binary);
+    }
+
+    function base64ToBlob(data, mime) {
+      const binary = atob(data || "");
+      const chunkSize = 0x8000;
+      const chunks = [];
+      for (let i = 0; i < binary.length; i += chunkSize) {
+        const slice = binary.slice(i, i + chunkSize);
+        const bytes = new Uint8Array(slice.length);
+        for (let j = 0; j < slice.length; j++) {
+          bytes[j] = slice.charCodeAt(j);
+        }
+        chunks.push(bytes);
+      }
+      return new Blob(chunks, { type: mime });
+    }
+
+    async function readClipboardImage() {
+      if (!navigator.clipboard.read) return null;
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((candidate) => candidate === "image/png");
+        if (!type) continue;
+        const blob = await item.getType(type);
+        return { mime: type, data: await blobToBase64(blob) };
+      }
+      return null;
+    }
+
+    async function writeImageClipboard(image) {
+      if (!window.ClipboardItem || !navigator.clipboard.write) {
+        throw new Error("image clipboard is not supported");
+      }
+      const blob = base64ToBlob(image.data, image.mime);
+      await navigator.clipboard.write([new ClipboardItem({ [image.mime]: blob })]);
+    }
+
     async function receiveText(status, messages, text) {
       addMessage(messages, "received", text);
       try {
         if (!document.hasFocus()) throw new Error("tab is not active");
         await navigator.clipboard.writeText(text);
         status.textContent = "Received and copied.";
-        pendingCopyText = "";
+        clearPendingCopy();
         showClipboardNotification(text, false);
       } catch (_) {
         status.textContent = "Received.";
+        pendingCopyImage = null;
         pendingCopyText = text;
         showClipboardNotification(text, true);
       }
     }
 
+    async function receiveImage(status, messages, image) {
+      addMessage(messages, "received", imageSummary(image));
+      try {
+        if (!document.hasFocus()) throw new Error("tab is not active");
+        await writeImageClipboard(image);
+        status.textContent = "Received and copied.";
+        clearPendingCopy();
+        showImageClipboardNotification(image, false);
+      } catch (_) {
+        status.textContent = "Received.";
+        pendingCopyText = "";
+        pendingCopyImage = image;
+        showImageClipboardNotification(image, true);
+      }
+    }
+
     async function sendClipboard(status, messages) {
+      try {
+        const image = await readClipboardImage();
+        if (image) {
+          await postJSON(`/api/session/${sid}/clipboard`, image);
+          status.textContent = "Sent.";
+          addMessage(messages, "sent", imageSummary(image));
+          showNotice("Image sent", "success", imageSummary(image));
+          return;
+        }
+      } catch (_) {}
+
       let text = "";
       try {
         text = await navigator.clipboard.readText();
@@ -1142,8 +1248,11 @@
             setJoinLink(event.sid);
             return;
           }
-          if (event.type !== "clipboard.text") return;
-          receiveText(status, messages, event.text || "");
+          if (event.type === "clipboard.image") {
+            receiveImage(status, messages, { mime: event.mime || "image/png", data: event.data || "" });
+            return;
+          }
+          if (event.type === "clipboard.text") receiveText(status, messages, event.text || "");
         };
       }
       connect();
@@ -1195,6 +1304,10 @@
               }
               if (event.type === "link") {
                 setJoinLink(event.sid);
+                return;
+              }
+              if (event.type === "clipboard.image") {
+                receiveImage(status, messages, { mime: event.mime || "image/png", data: event.data || "" });
                 return;
               }
               if (event.type === "clipboard.text") receiveText(status, messages, event.text || "");

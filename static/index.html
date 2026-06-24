@@ -11,6 +11,7 @@
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #f8f8f3;
       color: #171717;
+      overflow-x: hidden;
     }
     * { box-sizing: border-box; }
     body {
@@ -19,6 +20,7 @@
       min-height: 100svh;
       padding: 22px;
       position: relative;
+      overflow-x: hidden;
     }
     .app-layout {
       width: min(100%, 980px);
@@ -89,7 +91,10 @@
       display: none !important;
     }
     .spacer { min-height: 12px; }
+    .button-spacer { min-height: 0; }
     .notice {
+      width: min(100%, 340px);
+      justify-self: center;
       min-height: 102px;
       border: 1px solid transparent;
       border-radius: 8px;
@@ -415,6 +420,7 @@
       padding-top: 2px;
       text-align: center;
       font-size: 13px;
+      color: #5c6257;
     }
     footer a {
       color: #5c6257;
@@ -456,6 +462,17 @@
       body.mobile-mode {
         overflow-x: hidden;
       }
+      body.mobile-mode main {
+        grid-template-rows: auto auto minmax(8px, 1fr) auto auto auto auto;
+        gap: 12px;
+      }
+      body.mobile-mode .qr {
+        width: min(100%, 224px);
+        padding: 10px;
+      }
+      body.mobile-mode .notice {
+        min-height: 86px;
+      }
       .device-pane-toggle {
         position: absolute;
         top: 10px;
@@ -478,6 +495,7 @@
         stroke-width: 2.5;
       }
       body.mobile-mode .desktop-pane {
+        display: none;
         position: absolute;
         top: 0;
         right: 0;
@@ -485,15 +503,16 @@
         width: min(86vw, 320px);
         min-height: 100svh;
         overflow-y: auto;
-        transform: translateX(100%);
-        transition: transform .18s ease;
         border-top: 0;
         border-right: 0;
         border-bottom: 0;
         border-radius: 8px 0 0 8px;
       }
       body.mobile-mode.pane-open .desktop-pane {
-        transform: translateX(0);
+        display: block;
+      }
+      body.mobile-mode.pane-open .device-pane-toggle {
+        display: none;
       }
     }
     @media (min-width: 1160px) {
@@ -591,6 +610,7 @@
         border-color: #881337;
         color: #fecdd3;
       }
+      footer { color: #b9beb1; }
       footer a { color: #b9beb1; }
       footer a:hover { color: #8ab4f8; }
     }
@@ -625,7 +645,7 @@
         <div id="notifData" class="notif-data"></div>
       </div>
 
-      <div class="spacer" aria-hidden="true"></div>
+      <div class="spacer button-spacer" aria-hidden="true"></div>
 
       <div id="pcActions" class="actions hidden">
         <button id="sendPC" class="send-button" type="button">
@@ -648,7 +668,7 @@
       </div>
 
       <footer>
-        <a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
+        Blake Becker | <a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
       </footer>
     </main>
 
@@ -717,7 +737,6 @@
     const copyConnectURL = document.querySelector("#copyConnectURL");
     const refreshJoinLink = document.querySelector("#refreshJoinLink");
     const devicePaneToggle = document.querySelector("#devicePaneToggle");
-    const devicePaneToggleIcon = document.querySelector("#devicePaneToggleIcon");
     const deviceModal = document.querySelector("#deviceModal");
     const closeDeviceModal = document.querySelector("#closeDeviceModal");
     const deviceNameInput = document.querySelector("#deviceNameInput");
@@ -856,12 +875,19 @@
       document.body.classList.toggle("pane-open", open);
       devicePaneToggle.setAttribute("aria-expanded", open ? "true" : "false");
       devicePaneToggle.setAttribute("aria-label", open ? "Close devices" : "Open devices");
-      devicePaneToggleIcon.innerHTML = open
-        ? `<path d="m9 18 6-6-6-6"></path>`
-        : `<path d="m15 18-6-6 6-6"></path>`;
     }
 
     devicePaneToggle.onclick = () => setPaneOpen(!document.body.classList.contains("pane-open"));
+    document.addEventListener("click", (event) => {
+      if (
+        pageRole === "mobile" &&
+        document.body.classList.contains("pane-open") &&
+        !devicePane.contains(event.target) &&
+        !devicePaneToggle.contains(event.target)
+      ) {
+        setPaneOpen(false);
+      }
+    });
 
     function syncJoinedPaneLayout() {
       if (pageRole !== "mobile") return;

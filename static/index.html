@@ -459,18 +459,22 @@
       }
     }
     @media (max-width: 899px) {
-      body.mobile-mode {
+      body.mobile-mode,
+      body.pc-mode {
         overflow-x: hidden;
       }
-      body.mobile-mode main {
+      body.mobile-mode main,
+      body.pc-mode main {
         grid-template-rows: auto auto minmax(8px, 1fr) auto auto auto auto;
         gap: 12px;
       }
-      body.mobile-mode .qr {
+      body.mobile-mode .qr,
+      body.pc-mode .qr {
         width: min(100%, 224px);
         padding: 10px;
       }
-      body.mobile-mode .notice {
+      body.mobile-mode .notice,
+      body.pc-mode .notice {
         min-height: 86px;
       }
       .device-pane-toggle {
@@ -494,7 +498,8 @@
         height: 18px;
         stroke-width: 2.5;
       }
-      body.mobile-mode .desktop-pane {
+      body.mobile-mode .desktop-pane,
+      body.pc-mode .desktop-pane {
         display: none;
         position: absolute;
         top: 0;
@@ -508,10 +513,12 @@
         border-bottom: 0;
         border-radius: 8px 0 0 8px;
       }
-      body.mobile-mode.pane-open .desktop-pane {
+      body.mobile-mode.pane-open .desktop-pane,
+      body.pc-mode.pane-open .desktop-pane {
         display: block;
       }
-      body.mobile-mode.pane-open .device-pane-toggle {
+      body.mobile-mode.pane-open .device-pane-toggle,
+      body.pc-mode.pane-open .device-pane-toggle {
         display: none;
       }
     }
@@ -776,7 +783,7 @@
       deviceCount.textContent = `${plural(connected, "device")} connected`;
       document.querySelector("#device").textContent = deviceCount.textContent;
       emptyDevices.classList.toggle("hidden", allDevices.length > 0);
-      document.querySelector("#pcActions").classList.toggle("hidden", pageRole !== "pc" || allDevices.length < 2);
+      document.querySelector("#pcActions").classList.toggle("hidden", pageRole !== "pc" || connected < 2);
       deviceList.replaceChildren(...allDevices.map(deviceRow));
     }
 
@@ -880,7 +887,7 @@
     devicePaneToggle.onclick = () => setPaneOpen(!document.body.classList.contains("pane-open"));
     document.addEventListener("click", (event) => {
       if (
-        pageRole === "mobile" &&
+        (pageRole === "mobile" || pageRole === "pc") &&
         document.body.classList.contains("pane-open") &&
         !devicePane.contains(event.target) &&
         !devicePaneToggle.contains(event.target)
@@ -889,16 +896,18 @@
       }
     });
 
-    function syncJoinedPaneLayout() {
-      if (pageRole !== "mobile") return;
+    function syncPaneLayout() {
+      if (pageRole !== "mobile" && pageRole !== "pc") return;
       const wide = window.matchMedia("(min-width: 900px)").matches;
-      document.body.classList.toggle("pc-mode", wide);
-      appLayout.classList.toggle("pc-mode", wide);
+      if (pageRole === "mobile") {
+        document.body.classList.toggle("pc-mode", wide);
+        appLayout.classList.toggle("pc-mode", wide);
+      }
       devicePaneToggle.classList.toggle("hidden", wide);
       if (wide) setPaneOpen(false);
     }
 
-    window.addEventListener("resize", syncJoinedPaneLayout);
+    window.addEventListener("resize", syncPaneLayout);
 
     function setJoinLink(joinSID, qrURL, url) {
       if (!joinSID) return;
@@ -1102,8 +1111,8 @@
       appLayout.classList.add("pc-mode");
       appLayout.classList.remove("mobile-mode");
       devicePane.classList.remove("hidden");
-      devicePaneToggle.classList.add("hidden");
       document.querySelector("#mobileActions").classList.add("hidden");
+      syncPaneLayout();
       const status = document.querySelector("#pcStatus");
       const messages = document.querySelector("#pcMessages");
 
@@ -1114,24 +1123,30 @@
       status.textContent = "Scan QR code to connect.";
       renderDevices([]);
 
-      const ws = new WebSocket(websocketURL("pc"));
-      ws.onopen = () => status.textContent = "Scan QR code to connect.";
-      ws.onclose = () => status.textContent = "Session closed. Refresh the page to reconnect.";
-      ws.onerror = () => status.textContent = "Connection failed. Refresh the page to retry.";
-      ws.onmessage = async (message) => {
-        const event = JSON.parse(message.data);
-        if (event.type === "devices") {
-          renderDevices(event.devices || []);
-          status.textContent = (event.devices || []).some((device) => device.connected) ? "Ready." : "Scan QR code to connect.";
-          return;
-        }
-        if (event.type === "link") {
-          setJoinLink(event.sid);
-          return;
-        }
-        if (event.type !== "clipboard.text") return;
-        receiveText(status, messages, event.text || "");
-      };
+      function connect() {
+        const ws = new WebSocket(websocketURL("pc"));
+        ws.onopen = () => status.textContent = "Scan QR code to connect.";
+        ws.onclose = () => {
+          status.textContent = "Reconnecting...";
+          setTimeout(connect, 1000);
+        };
+        ws.onerror = () => status.textContent = "Connection failed.";
+        ws.onmessage = async (message) => {
+          const event = JSON.parse(message.data);
+          if (event.type === "devices") {
+            renderDevices(event.devices || []);
+            status.textContent = (event.devices || []).some((device) => device.connected) ? "Ready." : "Scan QR code to connect.";
+            return;
+          }
+          if (event.type === "link") {
+            setJoinLink(event.sid);
+            return;
+          }
+          if (event.type !== "clipboard.text") return;
+          receiveText(status, messages, event.text || "");
+        };
+      }
+      connect();
 
       document.querySelector("#sendPC").onclick = () => sendClipboard(status, messages);
     }
@@ -1158,28 +1173,34 @@
       devicePane.classList.remove("hidden");
       devicePaneToggle.classList.remove("hidden");
       document.querySelector("#pcActions").classList.add("hidden");
-      syncJoinedPaneLayout();
+      syncPaneLayout();
       const status = document.querySelector("#mobileStatus");
       const messages = document.querySelector("#mobileMessages");
       setJoinLink(sid);
       joinMobile()
         .then(() => {
-          const ws = new WebSocket(websocketURL("mobile"));
-          ws.onopen = () => status.textContent = "Connected.";
-          ws.onclose = () => status.textContent = "Session closed.";
-          ws.onerror = () => status.textContent = "Connection failed.";
-          ws.onmessage = (message) => {
-            const event = JSON.parse(message.data);
-            if (event.type === "devices") {
-              renderDevices(event.devices || []);
-              return;
-            }
-            if (event.type === "link") {
-              setJoinLink(event.sid);
-              return;
-            }
-            if (event.type === "clipboard.text") receiveText(status, messages, event.text || "");
-          };
+          function connect() {
+            const ws = new WebSocket(websocketURL("mobile"));
+            ws.onopen = () => status.textContent = "Connected.";
+            ws.onclose = () => {
+              status.textContent = "Reconnecting...";
+              setTimeout(connect, 1000);
+            };
+            ws.onerror = () => status.textContent = "Connection failed.";
+            ws.onmessage = (message) => {
+              const event = JSON.parse(message.data);
+              if (event.type === "devices") {
+                renderDevices(event.devices || []);
+                return;
+              }
+              if (event.type === "link") {
+                setJoinLink(event.sid);
+                return;
+              }
+              if (event.type === "clipboard.text") receiveText(status, messages, event.text || "");
+            };
+          }
+          connect();
         })
         .catch((err) => {
           status.textContent = err.message;
@@ -1200,8 +1221,8 @@
         appLayout.classList.add("pc-mode");
         appLayout.classList.remove("mobile-mode");
         devicePane.classList.remove("hidden");
-        devicePaneToggle.classList.add("hidden");
         document.querySelector("#mobileActions").classList.add("hidden");
+        syncPaneLayout();
         document.querySelector("#pcStatus").textContent = err.message;
         showNotice(err.message, "error", "");
       });

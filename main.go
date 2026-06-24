@@ -585,6 +585,7 @@ func (h *hub) disconnectPC(sid string, ch chan event) {
 	}
 	s.lastSeen = h.now()
 	close(ch)
+	_ = broadcastDevicesLocked(s)
 }
 
 func (h *hub) joinMobile(sid, existingToken, deviceName string) (mobileToken string, setCookie bool, err error) {
@@ -877,7 +878,7 @@ func deviceViewsLocked(s *session) []deviceView {
 		devices = append(devices, deviceView{
 			ID:          d.id,
 			Name:        d.name,
-			Connected:   true,
+			Connected:   d.send != nil,
 			ConnectedAt: d.connectedAt.Format(time.RFC3339),
 		})
 	}

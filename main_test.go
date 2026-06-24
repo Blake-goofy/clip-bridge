@@ -304,6 +304,76 @@ func TestPCReceivesDeviceListUpdates(t *testing.T) {
 	}
 }
 
+func TestDeviceListTracksLiveConnections(t *testing.T) {
+	h := newHub()
+	sid, pcToken, err := h.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcCh, err := h.connectPC(sid, pcToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-pcCh
+	mobileToken, _, err := h.joinMobile(sid, "", "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mobileCh, err := h.connectMobile(sid, mobileToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readDevicesEvent(t, "mobile", mobileCh)
+
+	h.disconnectPC(sid, pcCh)
+	devices := readDevicesEvent(t, "mobile", mobileCh)
+	got := map[string]bool{}
+	for _, d := range devices.Devices {
+		got[d.Name] = d.Connected
+	}
+	if got["Device1"] {
+		t.Fatalf("pc should be offline after websocket disconnect: %#v", devices.Devices)
+	}
+	if !got["Phone"] {
+		t.Fatalf("phone should stay connected: %#v", devices.Devices)
+	}
+}
+
+func TestMobileCanSendAfterPCReconnect(t *testing.T) {
+	h := newHub()
+	sid, pcToken, err := h.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcCh, err := h.connectPC(sid, pcToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-pcCh
+	mobileToken, _, err := h.joinMobile(sid, "", "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.connectMobile(sid, mobileToken); err != nil {
+		t.Fatal(err)
+	}
+	h.disconnectPC(sid, pcCh)
+	if err := h.relayClipboard(sid, mobileToken, "miss"); err != errPCGone {
+		t.Fatalf("send after pc disconnect = %v, want pc gone", err)
+	}
+	pcCh, err = h.connectPC(sid, pcToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readDevicesEvent(t, "pc", pcCh)
+	if err := h.relayClipboard(sid, mobileToken, "hit"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readClipboardEvent(t, "pc", pcCh); got.Text != "hit" {
+		t.Fatalf("pc got %q", got.Text)
+	}
+}
+
 func TestResumeRequiresPCCookie(t *testing.T) {
 	a := newApp()
 	ts := httptest.NewServer(a)
@@ -401,12 +471,12 @@ func TestOversizedPayloadRejected(t *testing.T) {
 }
 
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
-	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "position: fixed", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)"} {
+	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "position: fixed", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout"} {
 		if strings.Contains(indexHTML, old) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, "<h1>ClipBridge</h1>", "Secure clipboard handoff", "Send clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "devicePane", "devicePaneToggle", "mobileQr", "refreshJoinLink", "copyConnectURL", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, "<h1>ClipBridge</h1>", "Secure clipboard handoff", "Send clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "refreshJoinLink", "copyConnectURL", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}

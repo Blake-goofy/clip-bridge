@@ -508,12 +508,12 @@ func TestImageClipboardPayloadRelayAndValidation(t *testing.T) {
 }
 
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
-	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "position: fixed", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout"} {
+	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout"} {
 		if strings.Contains(indexHTML, old) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, "<h1>ClipBridge</h1>", "Secure clipboard handoff", "Send clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "refreshJoinLink", "copyConnectURL", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "refreshJoinLink", "copyConnectURL", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}

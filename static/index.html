@@ -47,9 +47,18 @@
     }
     h1 {
       margin: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .2em;
       font-size: clamp(28px, 8vw, 42px);
       line-height: 1;
       letter-spacing: 0;
+    }
+    .brand-icon {
+      width: .95em;
+      height: .95em;
+      flex: 0 0 auto;
     }
     .tagline {
       min-height: 22px;
@@ -338,13 +347,14 @@
       font-size: 13px;
     }
     .modal {
-      position: absolute;
+      position: fixed;
       inset: 0;
       z-index: 10;
       display: grid;
       place-items: center;
       padding: 22px;
-      min-height: 100%;
+      min-height: 100vh;
+      min-height: 100svh;
       background: rgba(23, 23, 23, .34);
     }
     .modal-card {
@@ -627,7 +637,7 @@
   <div id="appLayout" class="app-layout">
     <main>
       <header class="app-header">
-        <h1>ClipBridge</h1>
+        <h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>
         <p class="tagline">Secure clipboard handoff</p>
       </header>
 

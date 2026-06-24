@@ -58,7 +58,7 @@ func TestNoDeliveryWhenPCGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.hub.relayClipboard(sid, mobileToken, "hello"); err != errPCGone {
+	if err := a.hub.relayClipboardToPC(sid, mobileToken, "hello"); err != errPCGone {
 		t.Fatalf("expected errPCGone, got %v", err)
 	}
 }
@@ -83,6 +83,86 @@ func TestOversizedPayloadRejected(t *testing.T) {
 	}
 }
 
+func TestIndexUsesNeutralChatUI(t *testing.T) {
+	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<h1>", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender"} {
+		if strings.Contains(indexHTML, old) {
+			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
+		}
+	}
+	for _, want := range []string{"<title>ClipBridge</title>", "Scan QR code to connect.", "No device connected.", "Device connected.", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
+		if !strings.Contains(indexHTML, want) {
+			t.Fatalf("index is missing chat UI marker %q", want)
+		}
+	}
+}
+
+func TestWebSocketClipboardRelayFromPCToMobile(t *testing.T) {
+	a := newApp()
+	ts := httptest.NewServer(a)
+	defer ts.Close()
+
+	res, err := http.Post(ts.URL+"/api/session", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var created struct {
+		SID string `json:"sid"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	pcCookie := findCookie(t, res.Cookies(), pcCookieName(created.SID))
+
+	joinRes, err := http.Post(ts.URL+"/api/session/"+created.SID+"/join", "application/json", strings.NewReader(`{"device":"Device"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer joinRes.Body.Close()
+	if joinRes.StatusCode != http.StatusOK {
+		t.Fatalf("join status %d", joinRes.StatusCode)
+	}
+	mobileCookie := findCookie(t, joinRes.Cookies(), mobileCookieName(created.SID))
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/" + created.SID + "/mobile"
+	conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Cookie": []string{mobileCookie.String()}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/session/"+created.SID+"/clipboard", bytes.NewBufferString(`{"text":"hello mobile"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(pcCookie)
+	sendRes, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sendRes.Body.Close()
+	if sendRes.StatusCode != http.StatusAccepted {
+		t.Fatalf("send status %d", sendRes.StatusCode)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, b, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg event
+	if err := json.Unmarshal(b, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != "clipboard.text" || msg.Text != "hello mobile" {
+		t.Fatalf("wrong message %#v", msg)
+	}
+}
+
 func TestWebSocketClipboardRelay(t *testing.T) {
 	a := newApp()
 	ts := httptest.NewServer(a)
@@ -102,15 +182,7 @@ func TestWebSocketClipboardRelay(t *testing.T) {
 	if created.SID == "" {
 		t.Fatal("missing session id")
 	}
-	var pcCookie *http.Cookie
-	for _, c := range res.Cookies() {
-		if c.Name == pcCookieName(created.SID) {
-			pcCookie = c
-		}
-	}
-	if pcCookie == nil {
-		t.Fatal("missing pc cookie")
-	}
+	pcCookie := findCookie(t, res.Cookies(), pcCookieName(created.SID))
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/" + created.SID + "/pc"
 	conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
@@ -129,15 +201,7 @@ func TestWebSocketClipboardRelay(t *testing.T) {
 	if joinRes.StatusCode != http.StatusOK {
 		t.Fatalf("join status %d", joinRes.StatusCode)
 	}
-	var mobileCookie *http.Cookie
-	for _, c := range joinRes.Cookies() {
-		if c.Name == mobileCookieName(created.SID) {
-			mobileCookie = c
-		}
-	}
-	if mobileCookie == nil {
-		t.Fatal("missing mobile cookie")
-	}
+	mobileCookie := findCookie(t, joinRes.Cookies(), mobileCookieName(created.SID))
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/session/"+created.SID+"/clipboard", bytes.NewBufferString(`{"text":"hello pc"}`))
 	if err != nil {
@@ -172,4 +236,15 @@ func TestWebSocketClipboardRelay(t *testing.T) {
 			return
 		}
 	}
+}
+
+func findCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
+	t.Helper()
+	for _, c := range cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("missing cookie %s", name)
+	return nil
 }

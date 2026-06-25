@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,8 +21,8 @@ func TestSessionIDUsesWordCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^[a-z]+(-[a-z]+){5}$`).MatchString(sid) {
-		t.Fatalf("session id is not a six-word code: %q", sid)
+	if !regexp.MustCompile(`^[a-z]+(-[a-z]+){4}$`).MatchString(sid) {
+		t.Fatalf("session id is not a five-word code: %q", sid)
 	}
 }
 
@@ -450,6 +451,86 @@ func TestDesktopCanRenameAndDisconnectDevice(t *testing.T) {
 	}
 }
 
+func TestCannotDeleteActiveDevice(t *testing.T) {
+	h := newHub()
+	sid, pcToken, err := h.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	pcID := findDeviceByTokenLocked(h.sessions[sid], pcToken).id
+	h.mu.Unlock()
+	if err := h.removeDevice(sid, pcToken, pcID); err != errActiveDevice {
+		t.Fatalf("delete active device err = %v, want %v", err, errActiveDevice)
+	}
+	if err := h.verifyPC(sid, pcToken); err != nil {
+		t.Fatalf("active device should remain valid: %v", err)
+	}
+}
+
+func TestCloseSessionRequiresPCToken(t *testing.T) {
+	h := newHub()
+	sid, pcToken, err := h.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mobileToken, _, err := h.joinMobile(sid, "", "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.closeSession(sid, mobileToken); err != errUnauthorized {
+		t.Fatalf("mobile close err = %v, want unauthorized", err)
+	}
+	pcCh, err := h.connectPC(sid, pcToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readDevicesEvent(t, "pc", pcCh)
+	if err := h.closeSession(sid, pcToken); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case _, ok := <-pcCh:
+		if ok {
+			t.Fatal("closed session should close pc channel")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("closed session should close pc channel")
+	}
+	if h.exists(sid) {
+		t.Fatal("closed session should not exist")
+	}
+}
+
+func TestEncryptedClipboardPayloadRelay(t *testing.T) {
+	a := newApp()
+	sid, pcToken, err := a.hub.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcCh, err := a.hub.connectPC(sid, pcToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mobileToken, _, err := a.hub.joinMobile(sid, "", "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	box := `{"v":1,"iv":"abc","ct":"def"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/session/"+sid+"/clipboard", strings.NewReader(`{"mime":"`+encryptedClipboardMIME+`","data":`+strconv.Quote(box)+`}`))
+	req.AddCookie(&http.Cookie{Name: mobileCookieName(sid), Value: mobileToken})
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("encrypted send status = %d, body %s", w.Code, w.Body.String())
+	}
+	got := readEncryptedEvent(t, "pc", pcCh)
+	if got.MIME != encryptedClipboardMIME || got.Data != box {
+		t.Fatalf("wrong encrypted event %#v", got)
+	}
+}
+
 func TestOversizedPayloadRejected(t *testing.T) {
 	a := newApp()
 	sid, _, err := a.hub.createSession()
@@ -508,12 +589,12 @@ func TestImageClipboardPayloadRelayAndValidation(t *testing.T) {
 }
 
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
-	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout"} {
+	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout", "copyConnectURL", "connectURL", "copy-link", "?fragment=", "qrQuery"} {
 		if strings.Contains(indexHTML, old) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "refreshJoinLink", "copyConnectURL", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<script nonce="{{NONCE}}" src="/qrcode.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "sessionList", "reveal-delete", "onpointerdown", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}
@@ -536,6 +617,22 @@ func TestFaviconServed(t *testing.T) {
 	}
 }
 
+func TestQRCodeJSServed(t *testing.T) {
+	a := newApp()
+	req := httptest.NewRequest(http.MethodGet, "/qrcode.js", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("qrcode js status = %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/javascript; charset=utf-8" {
+		t.Fatalf("qrcode js content type = %q", got)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "ClipBridgeQRCode") || strings.Contains(body, "?fragment=") {
+		t.Fatal("qrcode js should expose local QR renderer without fragment transport")
+	}
+}
+
 func TestWebSocketClipboardRelayFromPCToMobile(t *testing.T) {
 	a := newApp()
 	ts := httptest.NewServer(a)
@@ -554,15 +651,16 @@ func TestWebSocketClipboardRelayFromPCToMobile(t *testing.T) {
 	}
 	pcCookie := findCookie(t, res.Cookies(), pcCookieName(created.SID))
 
-	joinRes, err := http.Post(ts.URL+"/api/session/"+created.SID+"/join", "application/json", strings.NewReader(`{"device":"Device"}`))
+	pcWSURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/" + created.SID + "/pc"
+	pcConn, _, err := websocket.Dial(context.Background(), pcWSURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Cookie": []string{pcCookie.String()}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer joinRes.Body.Close()
-	if joinRes.StatusCode != http.StatusOK {
-		t.Fatalf("join status %d", joinRes.StatusCode)
-	}
-	mobileCookie := findCookie(t, joinRes.Cookies(), mobileCookieName(created.SID))
+	defer pcConn.Close(websocket.StatusNormalClosure, "")
+
+	mobileCookie := joinMobileWithApprovalHTTP(t, ts.URL, created.SID, pcCookie, pcConn, "Device")
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/" + created.SID + "/mobile"
 	conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
@@ -624,15 +722,7 @@ func TestWebSocketClipboardRelay(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	joinRes, err := http.Post(ts.URL+"/api/session/"+created.SID+"/join", "application/json", strings.NewReader(`{"device":"iPhone"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer joinRes.Body.Close()
-	if joinRes.StatusCode != http.StatusOK {
-		t.Fatalf("join status %d", joinRes.StatusCode)
-	}
-	mobileCookie := findCookie(t, joinRes.Cookies(), mobileCookieName(created.SID))
+	mobileCookie := joinMobileWithApprovalHTTP(t, ts.URL, created.SID, pcCookie, conn, "iPhone")
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/session/"+created.SID+"/clipboard", bytes.NewBufferString(`{"text":"hello pc"}`))
 	if err != nil {
@@ -701,6 +791,22 @@ func readImageEvent(t *testing.T, name string, ch chan event) event {
 	}
 }
 
+func readEncryptedEvent(t *testing.T, name string, ch chan event) event {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-ch:
+			if got.Type == "clipboard.encrypted" {
+				return got
+			}
+		case <-timer.C:
+			t.Fatalf("%s did not receive encrypted clipboard event", name)
+		}
+	}
+}
+
 func readDevicesEvent(t *testing.T, name string, ch chan event) event {
 	t.Helper()
 	timer := time.NewTimer(2 * time.Second)
@@ -748,6 +854,74 @@ func readClipboardWS(t *testing.T, conn *websocket.Conn) event {
 		}
 		if msg.Type == "clipboard.text" {
 			return msg
+		}
+	}
+}
+
+func joinMobileWithApprovalHTTP(t *testing.T, baseURL, sid string, approverCookie *http.Cookie, events *websocket.Conn, device string) *http.Cookie {
+	t.Helper()
+	joinReq, err := http.NewRequest(http.MethodPost, baseURL+"/api/session/"+sid+"/join", strings.NewReader(`{"device":`+strconv.Quote(device)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joinReq.Header.Set("Content-Type", "application/json")
+	joinRes, err := http.DefaultClient.Do(joinReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer joinRes.Body.Close()
+	if joinRes.StatusCode != http.StatusAccepted {
+		t.Fatalf("join status %d", joinRes.StatusCode)
+	}
+	pendingCookie := findCookie(t, joinRes.Cookies(), pendingJoinCookieName(sid))
+	request := readJoinRequestWS(t, events)
+
+	approveReq, err := http.NewRequest(http.MethodPost, baseURL+"/api/session/"+sid+"/joins/"+request.ID+"/approve", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approveReq.AddCookie(approverCookie)
+	approveRes, err := http.DefaultClient.Do(approveReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer approveRes.Body.Close()
+	if approveRes.StatusCode != http.StatusOK {
+		t.Fatalf("approve status %d", approveRes.StatusCode)
+	}
+
+	claimReq, err := http.NewRequest(http.MethodPost, baseURL+"/api/session/"+sid+"/join", strings.NewReader(`{"device":`+strconv.Quote(device)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimReq.Header.Set("Content-Type", "application/json")
+	claimReq.AddCookie(pendingCookie)
+	claimRes, err := http.DefaultClient.Do(claimReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer claimRes.Body.Close()
+	if claimRes.StatusCode != http.StatusOK {
+		t.Fatalf("claim status %d", claimRes.StatusCode)
+	}
+	return findCookie(t, claimRes.Cookies(), mobileCookieName(sid))
+}
+
+func readJoinRequestWS(t *testing.T, conn *websocket.Conn) joinRequestView {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		_, b, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var msg event
+		if err := json.Unmarshal(b, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if len(msg.JoinRequests) > 0 {
+			return msg.JoinRequests[0]
 		}
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const sessionWordCount = 6
+const sessionWordCount = 5
 
 var sessionWords = [...]string{
 	"able", "acid", "acre", "aged", "ally", "amber", "angel", "apple",

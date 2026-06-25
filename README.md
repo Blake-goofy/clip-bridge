@@ -14,9 +14,10 @@ Open `http://localhost:8080`, then scan the QR code or copy the join link on ano
 
 - Short word-code join links and QR codes.
 - Multi-device sessions. The first browser is `Device1`; later devices are `Device2`, `Device3`, and so on.
-- Shared device manager on every device. Desktop shows the pane on the right; mobile has a small arrow toggle.
+- Shared session and device managers on every device. Desktop shows sessions on the left and devices on the right; mobile has separate edge toggles.
 - Device rename and delete actions sync to all connected devices.
-- Join links can be rotated without kicking out existing devices.
+- New devices must be approved by a device already connected to the session.
+- The original browser can add, select, and close multiple join links.
 - The original browser remembers its last session locally and can resume while the server still has it.
 - Clipboard images are relayed as PNG payloads with a 5 MiB decoded size limit.
 
@@ -29,9 +30,11 @@ Open `http://localhost:8080`, then scan the QR code or copy the join link on ano
 ## Security Notes
 
 - No accounts, database, analytics, or third-party frontend assets.
-- Clipboard text and images are relayed in memory and are not logged or persisted.
+- Clipboard text and images are encrypted in the browser with AES-GCM before relay. The server relays ciphertext in memory and does not log or persist clipboard contents.
+- Join links keep the encryption key in the URL fragment, which browsers do not send in normal HTTP requests. QR codes are rendered in the browser, so the key is not sent in a QR generation request.
+- A copied link or QR code only starts a pending join; a connected device still has to allow the new device before it receives a session cookie.
 - Pairing auth tokens are HttpOnly cookies.
-- Rotating a join link only creates a new invite URL for the same session. Existing devices stay connected.
+- Closing a link requires the original browser's PC cookie and disconnects that session.
 - `?text=` shortcut URLs are not supported because URLs can leak through logs, history, and referrers.
 
 ## Test

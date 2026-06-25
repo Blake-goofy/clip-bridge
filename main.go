@@ -23,7 +23,6 @@ import (
 	"unicode"
 
 	"github.com/coder/websocket"
-	qrcode "github.com/skip2/go-qrcode"
 )
 
 const (
@@ -31,8 +30,10 @@ const (
 	maxImageBytes            = 5 * 1024 * 1024
 	maxImageBase64Bytes      = ((maxImageBytes + 2) / 3) * 4
 	maxClipboardRequestBytes = maxImageBase64Bytes + 4096
+	encryptedClipboardMIME   = "application/vnd.clipbridge.encrypted+json"
 	unpairedTTL              = 30 * 24 * time.Hour
 	idleTTL                  = 30 * 24 * time.Hour
+	pendingJoinTTL           = 5 * time.Minute
 )
 
 //go:embed static/index.html
@@ -41,12 +42,16 @@ var indexHTML string
 //go:embed static/favicon.svg
 var faviconSVG string
 
+//go:embed static/qrcode.js
+var qrcodeJS string
+
 var (
 	errNotFound     = errors.New("session not found")
 	errUnauthorized = errors.New("unauthorized")
 	errPCGone       = errors.New("no device connected")
 	errBusy         = errors.New("device is busy")
 	errConflict     = errors.New("device is already connected")
+	errActiveDevice = errors.New("cannot delete active device")
 )
 
 type app struct {
@@ -69,6 +74,7 @@ type session struct {
 	pcSend     chan event
 	nextDevice int
 	devices    map[string]*device
+	pending    map[string]*pendingJoin
 }
 
 type device struct {
@@ -80,22 +86,39 @@ type device struct {
 	send        chan event
 }
 
+type pendingJoin struct {
+	id          string
+	tokenHash   [32]byte
+	name        string
+	requestedAt time.Time
+	lastSeen    time.Time
+	approved    bool
+}
+
 type deviceView struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Connected   bool   `json:"connected"`
+	Active      bool   `json:"active"`
 	ConnectedAt string `json:"connectedAt"`
 }
 
+type joinRequestView struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	RequestedAt string `json:"requestedAt"`
+}
+
 type event struct {
-	Type     string       `json:"type"`
-	SID      string       `json:"sid,omitempty"`
-	DeviceID string       `json:"deviceId,omitempty"`
-	Device   string       `json:"device,omitempty"`
-	Devices  []deviceView `json:"devices,omitempty"`
-	Text     string       `json:"text,omitempty"`
-	MIME     string       `json:"mime,omitempty"`
-	Data     string       `json:"data,omitempty"`
+	Type         string            `json:"type"`
+	SID          string            `json:"sid,omitempty"`
+	DeviceID     string            `json:"deviceId,omitempty"`
+	Device       string            `json:"device,omitempty"`
+	Devices      []deviceView      `json:"devices,omitempty"`
+	JoinRequests []joinRequestView `json:"joinRequests,omitempty"`
+	Text         string            `json:"text,omitempty"`
+	MIME         string            `json:"mime,omitempty"`
+	Data         string            `json:"data,omitempty"`
 }
 
 func main() {
@@ -129,10 +152,10 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.handleIndex(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/favicon.svg":
 		a.handleFavicon(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/qrcode.js":
+		a.handleQRCodeJS(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/session":
 		a.handleCreateSession(w, r)
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/qr/") && strings.HasSuffix(r.URL.Path, ".png"):
-		a.handleQR(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/ws/") && strings.HasSuffix(r.URL.Path, "/pc"):
 		a.handlePCWebSocket(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/ws/") && strings.HasSuffix(r.URL.Path, "/mobile"):
@@ -161,6 +184,11 @@ func (a *app) handleFavicon(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(faviconSVG))
 }
 
+func (a *app) handleQRCodeJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	_, _ = w.Write([]byte(qrcodeJS))
+}
+
 func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	sid, pcToken, err := a.hub.createSession()
 	if err != nil {
@@ -170,25 +198,8 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	setTokenCookie(w, r, pcCookieName(sid), pcToken, unpairedTTL)
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"sid":     sid,
-		"qrURL":   publicBaseURL(r) + "/qr/" + sid + ".png",
 		"linkURL": publicBaseURL(r) + "/s/" + sid,
 	})
-}
-
-func (a *app) handleQR(w http.ResponseWriter, r *http.Request) {
-	sid := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/qr/"), ".png")
-	if !a.hub.joinLinkExists(sid) {
-		http.NotFound(w, r)
-		return
-	}
-	png, err := qrcode.Encode(publicBaseURL(r)+"/s/"+sid, qrcode.Medium, 256)
-	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(png)
 }
 
 func (a *app) handlePCWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -273,6 +284,12 @@ func (a *app) handleSessionPost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleJoin(w, r, sid)
+	case "joins":
+		if len(parts) != 4 {
+			http.NotFound(w, r)
+			return
+		}
+		a.handleJoinAction(w, r, sid, parts[2], parts[3])
 	case "resume":
 		if len(parts) != 2 {
 			http.NotFound(w, r)
@@ -291,6 +308,12 @@ func (a *app) handleSessionPost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleRotateJoinLink(w, r, sid)
+	case "close":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		a.handleCloseSession(w, r, sid)
 	case "devices":
 		if len(parts) != 4 {
 			http.NotFound(w, r)
@@ -336,6 +359,25 @@ func (a *app) handleDeviceAction(w http.ResponseWriter, r *http.Request, sid, de
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func (a *app) handleJoinAction(w http.ResponseWriter, r *http.Request, sid, requestID, action string) {
+	token, ok := a.deviceToken(r, sid)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	switch action {
+	case "approve":
+		if err := a.hub.approveJoin(sid, token, requestID); err != nil {
+			writeHubError(w, err)
+			return
+		}
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (a *app) handleRotateJoinLink(w http.ResponseWriter, r *http.Request, sid string) {
 	token, ok := a.deviceToken(r, sid)
 	if !ok {
@@ -349,9 +391,21 @@ func (a *app) handleRotateJoinLink(w http.ResponseWriter, r *http.Request, sid s
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"sid":     newSID,
-		"qrURL":   publicBaseURL(r) + "/qr/" + newSID + ".png",
 		"linkURL": publicBaseURL(r) + "/s/" + newSID,
 	})
+}
+
+func (a *app) handleCloseSession(w http.ResponseWriter, r *http.Request, sid string) {
+	pcToken, ok := tokenCookie(r, pcCookieName(sid))
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if err := a.hub.closeSession(sid, pcToken); err != nil {
+		writeHubError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *app) deviceToken(r *http.Request, sid string) (string, bool) {
@@ -370,7 +424,6 @@ func (a *app) handleResume(w http.ResponseWriter, r *http.Request, sid string) {
 	setTokenCookie(w, r, pcCookieName(sid), pcToken, idleTTL)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"sid":     sid,
-		"qrURL":   publicBaseURL(r) + "/qr/" + sid + ".png",
 		"linkURL": publicBaseURL(r) + "/s/" + sid,
 	})
 }
@@ -387,15 +440,24 @@ func (a *app) handleJoin(w http.ResponseWriter, r *http.Request, sid string) {
 	if strings.TrimSpace(req.Device) != "" {
 		deviceName = cleanDevice(req.Device)
 	}
-	mobileToken, setCookie, err := a.hub.joinMobile(sid, existing, deviceName)
+	pendingToken, _ := tokenCookie(r, pendingJoinCookieName(sid))
+	result, err := a.hub.requestMobileJoin(sid, existing, pendingToken, deviceName)
 	if err != nil {
 		writeHubError(w, err)
 		return
 	}
-	if setCookie {
-		setTokenCookie(w, r, mobileCookieName(sid), mobileToken, idleTTL)
+	if result.setPendingCookie {
+		setTokenCookie(w, r, pendingJoinCookieName(sid), result.pendingToken, pendingJoinTTL)
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	if result.setMobileCookie {
+		setTokenCookie(w, r, mobileCookieName(sid), result.mobileToken, idleTTL)
+		clearTokenCookie(w, r, pendingJoinCookieName(sid))
+	}
+	if result.pending {
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "pending"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "joined"})
 }
 
 func (a *app) handleClipboard(w http.ResponseWriter, r *http.Request, sid string) {
@@ -437,6 +499,17 @@ func (a *app) handleClipboard(w http.ResponseWriter, r *http.Request, sid string
 
 func clipboardEvent(w http.ResponseWriter, text, mime, data string) (event, bool) {
 	if mime != "" || data != "" {
+		if mime == encryptedClipboardMIME {
+			if data == "" {
+				writeError(w, http.StatusBadRequest, "missing encrypted data")
+				return event{}, false
+			}
+			if len([]byte(data)) > maxClipboardRequestBytes {
+				writeError(w, http.StatusRequestEntityTooLarge, "encrypted data is too large")
+				return event{}, false
+			}
+			return event{Type: "clipboard.encrypted", MIME: mime, Data: data}, true
+		}
 		// ponytail: browsers reliably expose clipboard images as PNG; add conversion if native JPEG/WebP clipboard support becomes common.
 		if mime != "image/png" {
 			writeError(w, http.StatusBadRequest, "unsupported image type")
@@ -480,11 +553,21 @@ func writeHubError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusGone, "no device connected")
 	case errors.Is(err, errBusy):
 		writeError(w, http.StatusServiceUnavailable, "device is busy")
+	case errors.Is(err, errActiveDevice):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, errConflict):
 		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeError(w, http.StatusNotFound, "session not found")
 	}
+}
+
+type joinResult struct {
+	mobileToken      string
+	pendingToken     string
+	setMobileCookie  bool
+	setPendingCookie bool
+	pending          bool
 }
 
 func (h *hub) createSession() (string, string, error) {
@@ -515,6 +598,7 @@ func (h *hub) createSession() (string, string, error) {
 			lastSeen:   now,
 			nextDevice: 2,
 			devices:    make(map[string]*device),
+			pending:    make(map[string]*pendingJoin),
 		}
 		deviceID, err := randomToken(9)
 		if err != nil {
@@ -634,6 +718,73 @@ func (h *hub) disconnectPC(sid string, ch chan event) {
 	_ = broadcastDevicesLocked(s)
 }
 
+func (h *hub) requestMobileJoin(sid, existingToken, pendingToken, deviceName string) (joinResult, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	h.cleanupLocked(now)
+	s, ok := h.sessionLocked(sid)
+	if !ok {
+		return joinResult{}, errNotFound
+	}
+	if sid != s.joinID {
+		return joinResult{}, errNotFound
+	}
+	if d := findDeviceByTokenLocked(s, existingToken); d != nil {
+		d.lastSeen = now
+		if deviceName != "" {
+			d.name = deviceName
+		}
+		s.lastSeen = now
+		_ = broadcastDevicesLocked(s)
+		return joinResult{}, nil
+	}
+	if p := findPendingJoinByTokenLocked(s, pendingToken); p != nil {
+		p.lastSeen = now
+		if deviceName != "" {
+			p.name = deviceName
+		}
+		s.lastSeen = now
+		if !p.approved {
+			return joinResult{pending: true}, nil
+		}
+		token, err := randomToken(32)
+		if err != nil {
+			return joinResult{}, err
+		}
+		if _, err := addMobileDeviceLocked(s, token, p.name, now); err != nil {
+			return joinResult{}, err
+		}
+		delete(s.pending, p.id)
+		_ = broadcastDevicesLocked(s)
+		return joinResult{mobileToken: token, setMobileCookie: true}, nil
+	}
+	if !hasConnectedDeviceLocked(s) {
+		return joinResult{}, errPCGone
+	}
+	pendingID, err := randomToken(9)
+	if err != nil {
+		return joinResult{}, err
+	}
+	pendingSecret, err := randomToken(32)
+	if err != nil {
+		return joinResult{}, err
+	}
+	if deviceName == "" {
+		deviceName = nextDeviceNameLocked(s)
+	}
+	s.pending[pendingID] = &pendingJoin{
+		id:          pendingID,
+		tokenHash:   tokenHash(pendingSecret),
+		name:        deviceName,
+		requestedAt: now,
+		lastSeen:    now,
+	}
+	s.lastSeen = now
+	_ = broadcastDevicesLocked(s)
+	return joinResult{pendingToken: pendingSecret, setPendingCookie: true, pending: true}, nil
+}
+
 func (h *hub) joinMobile(sid, existingToken, deviceName string) (mobileToken string, setCookie bool, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -659,23 +810,35 @@ func (h *hub) joinMobile(sid, existingToken, deviceName string) (mobileToken str
 	if err != nil {
 		return "", false, err
 	}
-	deviceID, err := randomToken(9)
-	if err != nil {
+	if _, err := addMobileDeviceLocked(s, token, deviceName, now); err != nil {
 		return "", false, err
-	}
-	if deviceName == "" {
-		deviceName = nextDeviceNameLocked(s)
-	}
-	s.devices[deviceID] = &device{
-		id:          deviceID,
-		tokenHash:   tokenHash(token),
-		name:        deviceName,
-		connectedAt: now,
-		lastSeen:    now,
 	}
 	s.lastSeen = now
 	_ = broadcastDevicesLocked(s)
 	return token, true, nil
+}
+
+func (h *hub) approveJoin(sid, token, requestID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	h.cleanupLocked(now)
+	s, ok := h.sessionLocked(sid)
+	if !ok {
+		return errNotFound
+	}
+	if findDeviceByTokenLocked(s, token) == nil {
+		return errUnauthorized
+	}
+	p, ok := s.pending[requestID]
+	if !ok || now.Sub(p.requestedAt) > pendingJoinTTL {
+		return errNotFound
+	}
+	p.approved = true
+	p.lastSeen = now
+	s.lastSeen = now
+	_ = broadcastDevicesLocked(s)
+	return nil
 }
 
 func (h *hub) connectMobile(sid, token string) (chan event, error) {
@@ -782,12 +945,16 @@ func (h *hub) removeDevice(sid, token, deviceID string) error {
 	if !ok {
 		return errNotFound
 	}
-	if findDeviceByTokenLocked(s, token) == nil {
+	requester := findDeviceByTokenLocked(s, token)
+	if requester == nil {
 		return errUnauthorized
 	}
 	d, ok := s.devices[deviceID]
 	if !ok {
 		return errNotFound
+	}
+	if d == requester {
+		return errActiveDevice
 	}
 	delete(s.devices, deviceID)
 	if d.send != nil {
@@ -799,6 +966,41 @@ func (h *hub) removeDevice(sid, token, deviceID string) error {
 	}
 	s.lastSeen = now
 	_ = broadcastDevicesLocked(s)
+	return nil
+}
+
+func (h *hub) closeSession(sid, pcToken string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	h.cleanupLocked(now)
+	s, ok := h.sessionLocked(sid)
+	if !ok {
+		return errNotFound
+	}
+	if !sameToken(s.pcHash, pcToken) {
+		return errUnauthorized
+	}
+	delete(h.sessions, s.id)
+	for alias, target := range h.aliases {
+		if target == s.id {
+			delete(h.aliases, alias)
+		}
+	}
+	closed := make(map[chan event]bool)
+	closeChannel := func(ch chan event) {
+		if ch == nil || closed[ch] {
+			return
+		}
+		close(ch)
+		closed[ch] = true
+	}
+	closeChannel(s.pcSend)
+	s.pcSend = nil
+	for _, d := range s.devices {
+		closeChannel(d.send)
+		d.send = nil
+	}
 	return nil
 }
 
@@ -834,6 +1036,7 @@ func (h *hub) rotateJoinLink(sid, token string) (string, error) {
 		h.aliases[newSID] = s.id
 		s.joinID = newSID
 		// ponytail: rotating a join link is a hard device reset; use per-device grants if partial revocation is needed later.
+		s.pending = make(map[string]*pendingJoin)
 		for id, d := range s.devices {
 			if d == requester {
 				continue
@@ -858,6 +1061,11 @@ func (h *hub) rotateJoinLink(sid, token string) (string, error) {
 func (h *hub) cleanupLocked(now time.Time) {
 	// ponytail: in-memory sessions are single-process only; use Redis/pubsub if Railway needs multiple instances.
 	for sid, s := range h.sessions {
+		for id, p := range s.pending {
+			if now.Sub(p.lastSeen) > pendingJoinTTL {
+				delete(s.pending, id)
+			}
+		}
 		unpairedExpired := len(s.devices) == 0 && now.Sub(s.createdAt) > unpairedTTL
 		idleExpired := now.Sub(s.lastSeen) > idleTTL
 		if unpairedExpired || idleExpired {
@@ -867,13 +1075,17 @@ func (h *hub) cleanupLocked(now time.Time) {
 					delete(h.aliases, alias)
 				}
 			}
-			if s.pcSend != nil {
-				close(s.pcSend)
-			}
-			for _, d := range s.devices {
-				if d.send != nil {
-					close(d.send)
+			closed := make(map[chan event]bool)
+			closeChannel := func(ch chan event) {
+				if ch == nil || closed[ch] {
+					return
 				}
+				close(ch)
+				closed[ch] = true
+			}
+			closeChannel(s.pcSend)
+			for _, d := range s.devices {
+				closeChannel(d.send)
 			}
 		}
 	}
@@ -912,23 +1124,64 @@ func findDeviceByChannelLocked(s *session, ch chan event) *device {
 	return nil
 }
 
+func findPendingJoinByTokenLocked(s *session, token string) *pendingJoin {
+	if token == "" {
+		return nil
+	}
+	for _, p := range s.pending {
+		if sameToken(p.tokenHash, token) {
+			return p
+		}
+	}
+	return nil
+}
+
+func hasConnectedDeviceLocked(s *session) bool {
+	for _, d := range s.devices {
+		if d.send != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func addMobileDeviceLocked(s *session, token, deviceName string, now time.Time) (*device, error) {
+	deviceID, err := randomToken(9)
+	if err != nil {
+		return nil, err
+	}
+	if deviceName == "" {
+		deviceName = nextDeviceNameLocked(s)
+	}
+	d := &device{
+		id:          deviceID,
+		tokenHash:   tokenHash(token),
+		name:        deviceName,
+		connectedAt: now,
+		lastSeen:    now,
+	}
+	s.devices[deviceID] = d
+	return d, nil
+}
+
 func nextDeviceNameLocked(s *session) string {
 	name := "Device" + strconv.Itoa(s.nextDevice)
 	s.nextDevice++
 	return name
 }
 
-func devicesEventLocked(s *session) event {
-	return event{Type: "devices", Devices: deviceViewsLocked(s)}
+func devicesEventLocked(s *session, active *device) event {
+	return event{Type: "devices", Devices: deviceViewsLocked(s, active), JoinRequests: joinRequestViewsLocked(s)}
 }
 
-func deviceViewsLocked(s *session) []deviceView {
+func deviceViewsLocked(s *session, active *device) []deviceView {
 	devices := make([]deviceView, 0, len(s.devices))
 	for _, d := range s.devices {
 		devices = append(devices, deviceView{
 			ID:          d.id,
 			Name:        d.name,
 			Connected:   d.send != nil,
+			Active:      d == active,
 			ConnectedAt: d.connectedAt.Format(time.RFC3339),
 		})
 	}
@@ -938,8 +1191,44 @@ func deviceViewsLocked(s *session) []deviceView {
 	return devices
 }
 
+func joinRequestViewsLocked(s *session) []joinRequestView {
+	requests := make([]joinRequestView, 0, len(s.pending))
+	for _, p := range s.pending {
+		if p.approved {
+			continue
+		}
+		requests = append(requests, joinRequestView{
+			ID:          p.id,
+			Name:        p.name,
+			RequestedAt: p.requestedAt.Format(time.RFC3339),
+		})
+	}
+	sort.Slice(requests, func(i, j int) bool {
+		return requests[i].RequestedAt < requests[j].RequestedAt
+	})
+	return requests
+}
+
 func broadcastDevicesLocked(s *session) error {
-	return broadcastLocked(s, devicesEventLocked(s))
+	sent := 0
+	busy := 0
+	for _, d := range s.devices {
+		if d.send == nil {
+			continue
+		}
+		if err := sendLocked(d.send, devicesEventLocked(s, d)); err != nil {
+			busy++
+			continue
+		}
+		sent++
+	}
+	if sent > 0 {
+		return nil
+	}
+	if busy > 0 {
+		return errBusy
+	}
+	return errPCGone
 }
 
 func broadcastLocked(s *session, msg event) error {
@@ -1031,6 +1320,10 @@ func mobileCookieName(sid string) string {
 	return "cb_mobile_" + sid
 }
 
+func pendingJoinCookieName(sid string) string {
+	return "cb_join_" + sid
+}
+
 func tokenCookie(r *http.Request, name string) (string, bool) {
 	c, err := r.Cookie(name)
 	if err != nil || c.Value == "" {
@@ -1045,6 +1338,18 @@ func setTokenCookie(w http.ResponseWriter, r *http.Request, name, value string, 
 		Value:    value,
 		Path:     "/",
 		MaxAge:   int(ttl.Seconds()),
+		HttpOnly: true,
+		Secure:   secureCookie(r),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func clearTokenCookie(w http.ResponseWriter, r *http.Request, name string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   secureCookie(r),
 		SameSite: http.SameSiteStrictMode,

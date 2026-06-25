@@ -68,6 +68,7 @@ type hub struct {
 type session struct {
 	id         string
 	joinID     string
+	name       string
 	pcHash     [32]byte
 	createdAt  time.Time
 	lastSeen   time.Time
@@ -112,6 +113,7 @@ type joinRequestView struct {
 type event struct {
 	Type         string            `json:"type"`
 	SID          string            `json:"sid,omitempty"`
+	Name         string            `json:"name,omitempty"`
 	DeviceID     string            `json:"deviceId,omitempty"`
 	Device       string            `json:"device,omitempty"`
 	Devices      []deviceView      `json:"devices,omitempty"`
@@ -302,6 +304,12 @@ func (a *app) handleSessionPost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleClipboard(w, r, sid)
+	case "name":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		a.handleSessionName(w, r, sid)
 	case "link":
 		if len(parts) != 2 {
 			http.NotFound(w, r)
@@ -323,6 +331,29 @@ func (a *app) handleSessionPost(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (a *app) handleSessionName(w http.ResponseWriter, r *http.Request, sid string) {
+	token, ok := a.deviceToken(r, sid)
+	if !ok || a.hub.verifyDevice(sid, token) != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if err := a.hub.renameSession(sid, token, cleanSessionName(req.Name)); err != nil {
+		writeHubError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *app) handleDeviceAction(w http.ResponseWriter, r *http.Request, sid, deviceID, action string) {
@@ -697,6 +728,7 @@ func (h *hub) connectPC(sid, token string) (chan event, error) {
 	d.send = ch
 	d.lastSeen = now
 	s.lastSeen = now
+	_ = sendLocked(ch, sessionEventLocked(s))
 	_ = broadcastDevicesLocked(s)
 	return ch, nil
 }
@@ -861,6 +893,7 @@ func (h *hub) connectMobile(sid, token string) (chan event, error) {
 	d.send = ch
 	d.lastSeen = now
 	s.lastSeen = now
+	_ = sendLocked(ch, sessionEventLocked(s))
 	_ = broadcastDevicesLocked(s)
 	return ch, nil
 }
@@ -911,6 +944,24 @@ func (h *hub) relayClipboardEvent(sid, token string, msg event) error {
 	d.lastSeen = now
 	s.lastSeen = now
 	return sendToOtherDevicesLocked(s, d, msg)
+}
+
+func (h *hub) renameSession(sid, token, name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	h.cleanupLocked(now)
+	s, ok := h.sessionLocked(sid)
+	if !ok {
+		return errNotFound
+	}
+	if findDeviceByTokenLocked(s, token) == nil {
+		return errUnauthorized
+	}
+	s.name = name
+	s.lastSeen = now
+	_ = broadcastLocked(s, sessionEventLocked(s))
+	return nil
 }
 
 func (h *hub) renameDevice(sid, token, deviceID, name string) error {
@@ -1168,6 +1219,10 @@ func nextDeviceNameLocked(s *session) string {
 	name := "Device" + strconv.Itoa(s.nextDevice)
 	s.nextDevice++
 	return name
+}
+
+func sessionEventLocked(s *session) event {
+	return event{Type: "session", SID: s.id, Name: s.name}
 }
 
 func devicesEventLocked(s *session, active *device) event {
@@ -1451,6 +1506,31 @@ func cleanDevice(s string) string {
 	out := strings.TrimSpace(b.String())
 	if out == "" {
 		return "Mobile"
+	}
+	return out
+}
+
+func cleanSessionName(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "Session"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\n' || r == '\r' || r == '\t' {
+			b.WriteByte(' ')
+			continue
+		}
+		if unicode.IsPrint(r) {
+			b.WriteRune(r)
+		}
+		if b.Len() >= 40 {
+			break
+		}
+	}
+	out := strings.TrimSpace(b.String())
+	if out == "" {
+		return "Session"
 	}
 	return out
 }

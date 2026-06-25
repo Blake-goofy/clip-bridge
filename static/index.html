@@ -1121,12 +1121,18 @@
       sessionModal.classList.add("hidden");
     }
 
-    function renameActiveSession() {
+    async function renameActiveSession() {
       if (!activeSession) return;
-      activeSession.name = cleanName(sessionNameInput.value, sessionLabel(activeSession));
-      upsertSession(activeSession);
-      showNotice("Session renamed", "success", "");
-      closeSessionModalWindow();
+      const name = cleanName(sessionNameInput.value, sessionLabel(activeSession));
+      try {
+        await postJSON(`/api/session/${encodeURIComponent(activeSession.sid)}/name`, { name });
+        activeSession.name = name;
+        upsertSession(activeSession);
+        showNotice("Session renamed", "success", "");
+        closeSessionModalWindow();
+      } catch (err) {
+        showNotice(err.message, "error", "");
+      }
     }
 
     async function deleteActiveSession() {
@@ -1491,6 +1497,18 @@
       renderSessions();
     }
 
+    function updateSessionName(sessionSID, name) {
+      if (!name) return;
+      const existing = sessions.find((candidate) => candidate.sid === sessionSID);
+      if (existing) {
+        existing.name = cleanName(name, existing.name);
+      } else {
+        sessions.push({ sid: sessionSID, key: sessionSID === sid ? sessionKey : "", name: cleanName(name, nextSessionName()) });
+      }
+      saveSessions();
+      renderSessions();
+    }
+
     function rememberedSID() {
       try {
         return localStorage.getItem(storageKey) || "";
@@ -1828,6 +1846,13 @@
     }
 
     async function receiveEvent(status, messages, session, event) {
+      if (event.type === "session") {
+        if (event.name) {
+          session.name = event.name;
+          updateSessionName(event.sid || session.sid, event.name);
+        }
+        return;
+      }
       if (event.type === "me") {
         activeDeviceIDs.set(session.sid, event.deviceId || "");
         if (session.sid === sid) renderDevices(deviceCache.get(sid) || []);

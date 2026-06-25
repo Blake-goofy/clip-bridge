@@ -114,6 +114,42 @@ func TestDefaultDeviceNamesAndMobileRenameBroadcast(t *testing.T) {
 	t.Fatal("renamed device was not broadcast")
 }
 
+func TestSessionRenameBroadcastsToConnectedAndNewDevices(t *testing.T) {
+	h := newHub()
+	sid, pcToken, err := h.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcCh, err := h.connectPC(sid, pcToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mobileToken, _, err := h.joinMobile(sid, "", "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mobileCh, err := h.connectMobile(sid, mobileToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.renameSession(sid, pcToken, "Personal"); err != nil {
+		t.Fatal(err)
+	}
+	readSessionNameEvent(t, "pc", pcCh, "Personal")
+	readSessionNameEvent(t, "mobile", mobileCh, "Personal")
+
+	tabletToken, _, err := h.joinMobile(sid, "", "Tablet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tabletCh, err := h.connectMobile(sid, tabletToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readSessionNameEvent(t, "tablet", tabletCh, "Personal")
+}
+
 func TestRotateJoinLinkDropsOtherDevicesAndStaleLink(t *testing.T) {
 	h := newHub()
 	sid, pcToken, err := h.createSession()
@@ -287,22 +323,19 @@ func TestPCReceivesDeviceListUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var latest event
-	for i := 0; i < 4; i++ {
-		latest = <-pcCh
-	}
-	if latest.Type != "devices" {
-		t.Fatalf("got event type %q, want devices", latest.Type)
-	}
-	connected := 0
-	for _, d := range latest.Devices {
-		if d.Connected {
-			connected++
+	for i := 0; i < 6; i++ {
+		latest := readDevicesEvent(t, "pc", pcCh)
+		connected := 0
+		for _, d := range latest.Devices {
+			if d.Connected {
+				connected++
+			}
+		}
+		if connected == 3 {
+			return
 		}
 	}
-	if connected != 3 {
-		t.Fatalf("connected devices = %d, want 3: %#v", connected, latest.Devices)
-	}
+	t.Fatal("pc did not receive all connected devices")
 }
 
 func TestDeviceListTracksLiveConnections(t *testing.T) {
@@ -594,7 +627,7 @@ func TestIndexUsesNeutralClipboardUI(t *testing.T) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<script nonce="{{NONCE}}" src="/qrcode.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardPreview", "showClipboardPeek", "setupPeekButton", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<script nonce="{{NONCE}}" src="/qrcode.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardPreview", "showClipboardPeek", "setupPeekButton", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}
@@ -829,6 +862,22 @@ func readDevicesEvent(t *testing.T, name string, ch chan event) event {
 			}
 		case <-timer.C:
 			t.Fatalf("%s did not receive devices event", name)
+		}
+	}
+}
+
+func readSessionNameEvent(t *testing.T, name string, ch chan event, want string) event {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-ch:
+			if got.Type == "session" && got.Name == want {
+				return got
+			}
+		case <-timer.C:
+			t.Fatalf("%s did not receive session name %q", name, want)
 		}
 	}
 }

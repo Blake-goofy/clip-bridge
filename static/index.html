@@ -247,44 +247,52 @@
     }
     .session-list {
       display: grid;
+      margin-top: 14px;
+      margin-inline: -8px;
       border-top: 1px solid #e3e5dd;
       margin-bottom: 14px;
     }
     .session-row {
-      min-height: 46px;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 34px;
-      gap: 8px;
+      grid-template-columns: 10px minmax(0, 1fr) 34px;
+      gap: 8px 10px;
       align-items: center;
+      padding: 12px 8px;
       border-bottom: 1px solid #e3e5dd;
-      padding: 6px 0;
-      overflow: hidden;
+      cursor: pointer;
     }
-    .session-select {
+    .session-row.active {
+      background: #eff6ff;
+    }
+    .session-status {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #d9dbd2;
+    }
+    .session-row.active .session-status {
+      background: #174ea6;
+    }
+    .session-name {
       min-width: 0;
-      min-height: 34px;
-      padding: 0 8px;
-      border: 1px solid transparent;
-      background: transparent;
       color: #171717;
-      text-align: left;
-      font-size: 13px;
-      font-weight: 750;
+      font-weight: 650;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .session-select.active {
-      border-color: #a7c5fa;
-      background: #eff6ff;
-      color: #174ea6;
+    .session-meta {
+      grid-column: 2 / -1;
+      color: #5c6257;
+      font-size: 12px;
+      line-height: 1.35;
     }
     .add-session {
       min-height: 34px;
       padding: 0 12px;
       font-size: 13px;
     }
-    .session-delete {
+    .edit-session-button {
       width: 34px;
       min-height: 34px;
       padding: 0;
@@ -292,26 +300,21 @@
       place-items: center;
       border: 1px solid transparent;
       background: transparent;
-      color: #be123c;
+      color: #5c6257;
       opacity: 0;
-      pointer-events: none;
-      transform: translateX(8px);
-      transition: opacity .14s ease, transform .14s ease;
+      transition: opacity .12s ease, background-color .12s ease, border-color .12s ease;
     }
-    .session-row:focus-within .session-delete,
-    .session-row.reveal-delete .session-delete {
+    .session-row:hover .edit-session-button,
+    .edit-session-button:focus-visible {
       opacity: 1;
-      pointer-events: auto;
-      transform: translateX(0);
     }
-    @media (hover: hover) {
-      .session-row:hover .session-delete {
-        opacity: 1;
-        pointer-events: auto;
-        transform: translateX(0);
-      }
+    .edit-session-button:hover,
+    .edit-session-button:focus-visible {
+      border-color: #d9dbd2;
+      background: #f8f8f3;
+      color: #174ea6;
     }
-    .session-delete svg {
+    .edit-session-button svg {
       width: 17px;
       height: 17px;
       stroke-width: 2.4;
@@ -686,15 +689,15 @@
       .session-row {
         border-color: #34372f;
       }
-      .session-select { color: #f4f4ef; }
-      .session-select.active {
-        border-color: #31558f;
-        background: #172033;
-        color: #8ab4f8;
-      }
+      .session-name,
       .device-name { color: #f4f4ef; }
+      .session-meta { color: #b9beb1; }
+      .session-row.active,
       .device-row.active { background: #172033; }
+      .session-row.active .session-status { background: #8ab4f8; }
       .join-request-row { background: #422006; }
+      .edit-session-button:hover,
+      .edit-session-button:focus-visible,
       .edit-device-button:hover,
       .edit-device-button:focus-visible,
       .icon-button:hover,
@@ -807,7 +810,7 @@
     <aside id="sessionPane" class="desktop-pane session-pane hidden" aria-label="Session manager">
       <div class="pane-head">
         <h2>Sessions</h2>
-        <button id="addSession" class="add-session" type="button">Add link</button>
+        <button id="addSession" class="add-session" type="button">Add session</button>
       </div>
       <div id="sessionList" class="session-list"></div>
     </aside>
@@ -820,6 +823,28 @@
       <div id="deviceList" class="device-list"></div>
       <p id="emptyDevices" class="empty-devices">No devices connected.</p>
     </aside>
+
+    <div id="sessionModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="sessionModalTitle">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2 id="sessionModalTitle">Edit session</h2>
+          <button id="closeSessionModal" class="icon-button" type="button" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="M18 6 6 18"></path>
+              <path d="m6 6 12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <label class="modal-field">
+          Name
+          <input id="sessionNameInput" type="text" maxlength="40" autocomplete="off">
+        </label>
+        <div class="modal-actions">
+          <button id="deleteSessionButton" class="danger-button" type="button">Delete</button>
+          <button id="saveSessionName" type="button">Save</button>
+        </div>
+      </div>
+    </div>
 
     <div id="deviceModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deviceModalTitle">
       <div class="modal-card">
@@ -856,6 +881,11 @@
     const emptyDevices = document.querySelector("#emptyDevices");
     const sessionPaneToggle = document.querySelector("#sessionPaneToggle");
     const devicePaneToggle = document.querySelector("#devicePaneToggle");
+    const sessionModal = document.querySelector("#sessionModal");
+    const closeSessionModal = document.querySelector("#closeSessionModal");
+    const sessionNameInput = document.querySelector("#sessionNameInput");
+    const saveSessionName = document.querySelector("#saveSessionName");
+    const deleteSessionButton = document.querySelector("#deleteSessionButton");
     const deviceModal = document.querySelector("#deviceModal");
     const closeDeviceModal = document.querySelector("#closeDeviceModal");
     const deviceNameInput = document.querySelector("#deviceNameInput");
@@ -871,6 +901,7 @@
     let sessionKey = "";
     let linkURL = "";
     let joined = false;
+    let activeSession = null;
     let activeDevice = null;
     let pageRole = "";
     let sessions = loadSessions();
@@ -907,6 +938,11 @@
       return `${count} ${word}${count === 1 ? "" : "s"}`;
     }
 
+    function cleanName(value, fallback) {
+      const name = String(value || "").trim().replace(/\s+/g, " ");
+      return name || fallback;
+    }
+
     function formatConnectedAt(value) {
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return "Connected date unavailable";
@@ -921,76 +957,107 @@
     }
 
     function sessionRow(session) {
+      const isActive = session.sid === sid;
       const row = document.createElement("div");
-      row.className = "session-row";
-      let swipeStartX = 0;
-      let swipeStartY = 0;
-      let ignoreNextClick = false;
-
-      const select = document.createElement("button");
-      select.type = "button";
-      select.className = `session-select ${session.sid === sid ? "active" : ""}`;
-      select.textContent = session.sid;
-      select.title = session.sid;
-      select.onclick = (event) => {
-        if (ignoreNextClick) return;
-        if (session.sid === sid) {
-          copySelectedLink();
-          clearRevealedSessionDeletes();
-          if (event.detail > 0) select.blur();
-          return;
+      row.className = `session-row ${isActive ? "active" : ""}`;
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-label", `${isActive ? "Edit" : "Select"} ${sessionLabel(session)}${isActive ? ", current session" : ""}`);
+      row.onclick = () => {
+        if (isActive) {
+          openSessionModal(session);
+        } else {
+          selectSession(session, true);
         }
-        selectSession(session, true);
-        clearRevealedSessionDeletes();
-        if (event.detail > 0) select.blur();
+      };
+      row.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (isActive) {
+            openSessionModal(session);
+          } else {
+            selectSession(session, true);
+          }
+        }
       };
 
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "session-delete";
-      del.setAttribute("aria-label", `Delete ${session.sid}`);
-      del.title = `Delete ${session.sid}`;
-      del.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 15h10l1-15"></path></svg>`;
-      del.onclick = (event) => {
+      const status = document.createElement("span");
+      status.className = "session-status";
+      status.setAttribute("aria-label", isActive ? "Current session" : "Saved session");
+
+      const name = document.createElement("div");
+      name.className = "session-name";
+      name.textContent = sessionLabel(session);
+
+      const edit = document.createElement("button");
+      edit.className = "edit-session-button";
+      edit.type = "button";
+      edit.setAttribute("aria-label", `Edit ${sessionLabel(session)}`);
+      edit.title = `Edit ${sessionLabel(session)}`;
+      edit.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m12 20 9-9-4-4-9 9-2 6 6-2z"></path><path d="m15 7 4 4"></path></svg>`;
+      edit.onclick = (event) => {
         event.stopPropagation();
-        deleteSession(session);
+        selectSession(session, true);
+        openSessionModal(session);
       };
 
-      row.onpointerdown = (event) => {
-        if (event.pointerType !== "touch") return;
-        swipeStartX = event.clientX;
-        swipeStartY = event.clientY;
-        try { row.setPointerCapture(event.pointerId); } catch (_) {}
-      };
-      row.onpointermove = (event) => {
-        if (event.pointerType !== "touch" || swipeStartX === 0) return;
-        const dx = Math.abs(event.clientX - swipeStartX);
-        const dy = Math.abs(event.clientY - swipeStartY);
-        if (dy > 8 && dy > dx * 1.5) {
-          try { row.releasePointerCapture(event.pointerId); } catch (_) {}
-          swipeStartX = 0;
-          swipeStartY = 0;
-        }
-      };
-      row.onpointerup = (event) => {
-        if (event.pointerType !== "touch" || swipeStartX === 0) return;
-        const dx = event.clientX - swipeStartX;
-        const dy = event.clientY - swipeStartY;
-        swipeStartX = 0;
-        swipeStartY = 0;
-        if (Math.abs(dy) > 32 || Math.abs(dx) < 44) return;
-        ignoreNextClick = true;
-        setTimeout(() => { ignoreNextClick = false; }, 250);
-        clearRevealedSessionDeletes(row);
-        row.classList.toggle("reveal-delete", dx < 0);
-      };
-      row.onpointercancel = () => {
-        swipeStartX = 0;
-        swipeStartY = 0;
-      };
+      const meta = document.createElement("div");
+      meta.className = "session-meta";
+      meta.textContent = `${plural(connectedDeviceCount(session.sid), "device")} connected`;
 
-      row.append(select, del);
+      row.append(status, name, edit, meta);
       return row;
+    }
+
+    function sessionLabel(session) {
+      return String((session && session.name) || "").trim() || "Session";
+    }
+
+    function connectedDeviceCount(sessionSID) {
+      return (deviceCache.get(sessionSID) || []).filter((device) => device.connected).length;
+    }
+
+    function defaultSessionName(index) {
+      return `Session${index + 1}`;
+    }
+
+    function nextSessionName() {
+      const used = new Set(sessions.map((session) => sessionLabel(session)));
+      for (let i = 0; i < sessions.length + 100; i++) {
+        const name = defaultSessionName(i);
+        if (!used.has(name)) return name;
+      }
+      return defaultSessionName(sessions.length);
+    }
+
+    function openSessionModal(session) {
+      activeSession = session;
+      sessionNameInput.value = sessionLabel(session);
+      sessionModal.classList.remove("hidden");
+      requestAnimationFrame(() => {
+        sessionNameInput.focus();
+        sessionNameInput.select();
+      });
+    }
+
+    function closeSessionModalWindow() {
+      activeSession = null;
+      sessionModal.classList.add("hidden");
+    }
+
+    function renameActiveSession() {
+      if (!activeSession) return;
+      activeSession.name = cleanName(sessionNameInput.value, sessionLabel(activeSession));
+      upsertSession(activeSession);
+      showNotice("Session renamed", "success", "");
+      closeSessionModalWindow();
+    }
+
+    async function deleteActiveSession() {
+      if (!activeSession) return;
+      const target = activeSession;
+      closeSessionModalWindow();
+      await deleteSession(target);
     }
 
     function renderDevices(devices, joinRequests) {
@@ -1136,6 +1203,16 @@
       }
     }
 
+    closeSessionModal.onclick = closeSessionModalWindow;
+    saveSessionName.onclick = renameActiveSession;
+    deleteSessionButton.onclick = deleteActiveSession;
+    sessionNameInput.onkeydown = (event) => {
+      if (event.key === "Enter") renameActiveSession();
+    };
+    sessionModal.onclick = (event) => {
+      if (event.target === sessionModal) closeSessionModalWindow();
+    };
+
     closeDeviceModal.onclick = closeModal;
     saveDeviceName.onclick = renameActiveDevice;
     disconnectDevice.onclick = disconnectActiveDevice;
@@ -1146,7 +1223,9 @@
       if (event.target === deviceModal) closeModal();
     };
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !deviceModal.classList.contains("hidden")) closeModal();
+      if (event.key !== "Escape") return;
+      if (!sessionModal.classList.contains("hidden")) closeSessionModalWindow();
+      if (!deviceModal.classList.contains("hidden")) closeModal();
     });
 
     function setPaneOpen(kind, open) {
@@ -1166,9 +1245,6 @@
     sessionPaneToggle.onclick = () => setPaneOpen("session", !document.body.classList.contains("session-pane-open"));
     devicePaneToggle.onclick = () => setPaneOpen("device", !document.body.classList.contains("device-pane-open"));
     document.addEventListener("click", (event) => {
-      if (!event.target.closest(".session-row")) {
-        clearRevealedSessionDeletes();
-      }
       const paneOpen = document.body.classList.contains("session-pane-open") || document.body.classList.contains("device-pane-open");
       if (
         (pageRole === "mobile" || pageRole === "pc") &&
@@ -1199,12 +1275,6 @@
     }
 
     window.addEventListener("resize", syncPaneLayout);
-
-    function clearRevealedSessionDeletes(except) {
-      document.querySelectorAll(".session-row.reveal-delete").forEach((row) => {
-        if (row !== except) row.classList.remove("reveal-delete");
-      });
-    }
 
     function selectedSession() {
       return sessions.find((session) => session.sid === sid) || null;
@@ -1278,11 +1348,11 @@
     addSession.onclick = async () => {
       try {
         const data = await postJSON("/api/session");
-        const session = { sid: data.sid, key: randomSessionKey() };
+        const session = { sid: data.sid, key: randomSessionKey(), name: nextSessionName() };
         upsertSession(session);
         selectSession(session, true);
         connectPCSession(session);
-        showNotice("Link added", "success", linkURL);
+        showNotice("Session added", "success", linkURL);
       } catch (err) {
         showNotice(err.message, "error", "");
       }
@@ -1293,6 +1363,9 @@
       if (old) old.closed = true;
       if (old && old.ws) old.ws.close();
       pcLinks.delete(session.sid);
+      deviceCache.delete(session.sid);
+      joinRequestCache.delete(session.sid);
+      activeDeviceIDs.delete(session.sid);
       try {
         await postJSON(`/api/session/${encodeURIComponent(session.sid)}/close`);
       } catch (_) {}
@@ -1307,16 +1380,17 @@
       } else {
         renderSessions();
       }
-      showNotice("Link closed", "success", "");
+      showNotice("Session deleted", "success", "");
     }
 
     function loadSessions() {
       try {
         const parsed = JSON.parse(localStorage.getItem(sessionsKey) || "[]");
         if (Array.isArray(parsed)) {
-          return parsed.filter((session) => session && session.sid).map((session) => ({
+          return parsed.filter((session) => session && session.sid).map((session, index) => ({
             sid: String(session.sid),
-            key: String(session.key || "")
+            key: String(session.key || ""),
+            name: cleanName(session.name, defaultSessionName(index))
           }));
         }
       } catch (_) {}
@@ -1333,8 +1407,9 @@
       const existing = sessions.find((candidate) => candidate.sid === session.sid);
       if (existing) {
         existing.key = session.key || existing.key;
+        existing.name = cleanName(session.name, existing.name || nextSessionName());
       } else {
-        sessions.push({ sid: session.sid, key: session.key || "" });
+        sessions.push({ sid: session.sid, key: session.key || "", name: cleanName(session.name, nextSessionName()) });
       }
       saveSessions();
       renderSessions();
@@ -1362,7 +1437,8 @@
       const pathSID = sessionMatch ? sessionMatch[1] : "";
       if (pathSID) {
         const data = await postJSON(`/api/session/${encodeURIComponent(pathSID)}/resume`);
-        const session = { sid: data.sid, key: sessionKeyFromHash() || (sessions.find((item) => item.sid === data.sid) || {}).key || randomSessionKey() };
+        const saved = sessions.find((item) => item.sid === data.sid) || {};
+        const session = { sid: data.sid, key: sessionKeyFromHash() || saved.key || randomSessionKey(), name: saved.name || nextSessionName() };
         upsertSession(session);
         return session;
       }
@@ -1382,7 +1458,7 @@
         }
       }
       const data = await postJSON("/api/session");
-      const session = { sid: data.sid, key: randomSessionKey() };
+      const session = { sid: data.sid, key: randomSessionKey(), name: nextSessionName() };
       upsertSession(session);
       return session;
     }
@@ -1632,6 +1708,7 @@
       if (event.type === "me") {
         activeDeviceIDs.set(session.sid, event.deviceId || "");
         if (session.sid === sid) renderDevices(deviceCache.get(sid) || []);
+        renderSessions();
         return;
       }
       if (event.type === "devices") {
@@ -1643,6 +1720,7 @@
           renderDevices(event.devices || [], event.joinRequests || []);
           status.textContent = (event.devices || []).some((device) => device.connected) ? "Ready." : "Scan QR code to connect.";
         }
+        renderSessions();
         return;
       }
       if (event.type === "clipboard.encrypted") {
@@ -1799,7 +1877,8 @@
         showNotice("Secure link key missing", "error", "");
         return;
       }
-      const session = { sid, key: sessionKey };
+      const saved = sessions.find((item) => item.sid === sid) || {};
+      const session = { sid, key: sessionKey, name: saved.name || nextSessionName() };
       selectSession(session, true);
       setJoinLink(sid);
       joinMobile()

@@ -173,7 +173,7 @@ func (a *app) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
-	csp := "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self'; connect-src 'self' ws: wss:; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'"
+	csp := "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self' data:; connect-src 'self' ws: wss:; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'"
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(strings.ReplaceAll(indexHTML, "{{NONCE}}", nonce)))

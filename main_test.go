@@ -589,15 +589,25 @@ func TestImageClipboardPayloadRelayAndValidation(t *testing.T) {
 }
 
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
-	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "Add link", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout", "copyConnectURL", "connectURL", "copy-link", "?fragment=", "qrQuery", "session-select", "session-delete", "reveal-delete", "onpointerdown"} {
+	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "Add link", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout", "copyConnectURL", "connectURL", "copy-link", "?fragment=", "qrQuery", "session-select", "session-delete", "reveal-delete", "swipeStartX"} {
 		if strings.Contains(indexHTML, old) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<script nonce="{{NONCE}}" src="/qrcode.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<script nonce="{{NONCE}}" src="/qrcode.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardPreview", "showClipboardPeek", "setupPeekButton", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")"} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}
+	}
+}
+
+func TestIndexCSPAllowsRenderedImagePreviews(t *testing.T) {
+	a := newApp()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if got := w.Header().Get("Content-Security-Policy"); !strings.Contains(got, "img-src 'self' data:") {
+		t.Fatalf("CSP = %q, want data: image previews allowed", got)
 	}
 }
 

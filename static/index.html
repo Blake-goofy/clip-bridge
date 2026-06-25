@@ -142,6 +142,11 @@
       border-color: #fde68a;
       background: #fffbeb;
     }
+    .notice.peek {
+      border-color: #d9dbd2;
+      background: #f8f8f3;
+      grid-template-columns: 1fr;
+    }
     .notice.error {
       border-color: #fecaca;
       background: #fff1f2;
@@ -163,9 +168,22 @@
       background: #fef3c7;
       color: #b45309;
     }
+    .notice.peek .notif-icon {
+      background: #e8eadf;
+      color: #3f463b;
+    }
+    .notice.peek .notif-icon,
+    .notice.peek .notif-status {
+      display: none;
+    }
     .notice.error .notif-icon {
       background: #ffe4e6;
       color: #be123c;
+    }
+    .notif-icon svg {
+      width: 17px;
+      height: 17px;
+      stroke-width: 2.4;
     }
     .notif-status {
       align-self: center;
@@ -175,7 +193,7 @@
     }
     .notif-data {
       grid-column: 1 / -1;
-      max-height: 110px;
+      max-height: 220px;
       overflow-y: auto;
       color: #3f463b;
       font-size: 13px;
@@ -183,9 +201,20 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .notif-image {
+      display: block;
+      width: 100%;
+      max-height: 220px;
+      border: 1px solid #d9dbd2;
+      border-radius: 6px;
+      background: #fff;
+      object-fit: contain;
+    }
     .actions {
       display: flex;
+      gap: 10px;
       justify-content: center;
+      flex-wrap: wrap;
     }
     button {
       min-height: 50px;
@@ -203,11 +232,27 @@
       opacity: .55;
     }
     .send-button {
-      width: min(100%, 340px);
+      width: min(100%, 240px);
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 10px;
+    }
+    .peek-button {
+      width: 42px;
+      min-width: 42px;
+      min-height: 42px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      background: #f8f8f3;
+      color: #174ea6;
+      border: 1px solid #d9dbd2;
+    }
+    .peek-button svg {
+      width: 20px;
+      height: 20px;
+      stroke-width: 2.4;
     }
     .send-button svg {
       width: 20px;
@@ -642,6 +687,10 @@
         border-color: #854d0e;
         background: #422006;
       }
+      .notice.peek {
+        border-color: #34372f;
+        background: #1b1d18;
+      }
       .notice.error {
         border-color: #881337;
         background: #4c0519;
@@ -654,6 +703,10 @@
         background: #713f12;
         color: #fde68a;
       }
+      .notice.peek .notif-icon {
+        background: #252820;
+        color: #d7dccf;
+      }
       .notice.error .notif-icon {
         background: #881337;
         color: #fecdd3;
@@ -665,6 +718,15 @@
         background: #252820;
         border-color: #34372f;
         color: #8ab4f8;
+      }
+      .peek-button {
+        background: #252820;
+        border-color: #34372f;
+        color: #8ab4f8;
+      }
+      .notif-image {
+        background: #11130f;
+        border-color: #34372f;
       }
       .desktop-pane {
         background: #1b1d18;
@@ -771,6 +833,12 @@
       <div class="spacer button-spacer" aria-hidden="true"></div>
 
       <div id="pcActions" class="actions hidden">
+        <button id="peekPC" class="peek-button" type="button" aria-label="Peek clipboard" title="Peek clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        </button>
         <button id="sendPC" class="send-button" type="button">
           <span>Send clipboard</span>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
@@ -781,6 +849,12 @@
       </div>
 
       <div id="mobileActions" class="actions">
+        <button id="peekClipboard" class="peek-button" type="button" aria-label="Peek clipboard" title="Peek clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        </button>
         <button id="sendClipboard" class="send-button" type="button">
           <span>Send clipboard</span>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
@@ -903,6 +977,8 @@
     let joined = false;
     let activeSession = null;
     let activeDevice = null;
+    let peekActive = false;
+    let peekToken = 0;
     let pageRole = "";
     let sessions = loadSessions();
     let pendingCopyText = "";
@@ -1463,7 +1539,7 @@
       return session;
     }
 
-    function showNotice(message, state, text) {
+    function showNotice(message, state, content, sticky) {
       const notice = document.querySelector("#copyNotif");
       const icon = document.querySelector("#notifIcon");
       const statusText = document.querySelector("#notifStatus");
@@ -1474,17 +1550,47 @@
         notifDismissTimer = null;
       }
 
-      notice.classList.remove("success", "pending", "error");
+      notice.classList.remove("success", "pending", "peek", "error");
       notice.classList.add(state, "show");
-      icon.textContent = state === "pending" ? "!" : state === "error" ? "!" : "✓";
+      renderNoticeIcon(icon, state);
       statusText.textContent = message;
-      data.textContent = text || "";
+      renderNoticeContent(data, content);
 
-      if (state !== "pending") {
+      if (!sticky && state !== "pending") {
         notifDismissTimer = setTimeout(() => {
           notice.classList.remove("show");
         }, 2500);
       }
+    }
+
+    function renderNoticeIcon(container, state) {
+      container.replaceChildren();
+      if (state === "peek") {
+        container.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+        return;
+      }
+      container.textContent = state === "pending" || state === "error" ? "!" : "✓";
+    }
+
+    function hideNotice() {
+      if (notifDismissTimer) {
+        clearTimeout(notifDismissTimer);
+        notifDismissTimer = null;
+      }
+      document.querySelector("#copyNotif").classList.remove("show");
+    }
+
+    function renderNoticeContent(container, content) {
+      container.replaceChildren();
+      if (content && content.type === "image") {
+        const img = document.createElement("img");
+        img.className = "notif-image";
+        img.alt = content.alt || imageSummary(content.image);
+        img.src = imageDataURL(content.image);
+        container.append(img);
+        return;
+      }
+      container.textContent = content || "";
     }
 
     function imageSummary(image) {
@@ -1495,12 +1601,21 @@
       return `PNG image, ${size}`;
     }
 
+    function imageDataURL(image) {
+      const mime = image && image.mime && image.mime.startsWith("image/") ? image.mime : "image/png";
+      return `data:${mime};base64,${image && image.data ? image.data : ""}`;
+    }
+
     function showClipboardNotification(text, isPending) {
       showNotice(isPending ? "Click or focus the page to copy" : "Copied to clipboard", isPending ? "pending" : "success", text);
     }
 
     function showImageClipboardNotification(image, isPending) {
-      showNotice(isPending ? "Click or focus the page to copy image" : "Image copied to clipboard", isPending ? "pending" : "success", imageSummary(image));
+      showNotice(isPending ? "Click or focus the page to copy image" : "Image copied to clipboard", isPending ? "pending" : "success", {
+        type: "image",
+        image,
+        alt: imageSummary(image)
+      });
     }
 
     function clearPendingCopy() {
@@ -1615,6 +1730,14 @@
         return { mime: type, data: await blobToBase64(blob) };
       }
       return null;
+    }
+
+    async function readClipboardPreview() {
+      try {
+        const image = await readClipboardImage();
+        if (image) return { type: "image", image };
+      } catch (_) {}
+      return { type: "text", text: await navigator.clipboard.readText() };
     }
 
     async function writeImageClipboard(image) {
@@ -1743,6 +1866,56 @@
       if (event.type === "clipboard.text") await receiveText(status, messages, event.text || "");
     }
 
+    async function showClipboardPeek() {
+      peekActive = true;
+      const token = ++peekToken;
+      showNotice("", "peek", "", true);
+      try {
+        const preview = await readClipboardPreview();
+        if (!peekActive || token !== peekToken) return;
+        if (preview.type === "image") {
+          showNotice("", "peek", {
+            type: "image",
+            image: preview.image,
+            alt: imageSummary(preview.image)
+          }, true);
+          return;
+        }
+        showNotice("", "peek", preview.text, true);
+      } catch (_) {
+        if (peekActive && token === peekToken) showNotice("Clipboard access blocked", "error", "", true);
+      }
+    }
+
+    function hideClipboardPeek() {
+      if (!peekActive) return;
+      peekActive = false;
+      peekToken++;
+      hideNotice();
+    }
+
+    function setupPeekButton(button) {
+      button.onpointerdown = (event) => {
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+        event.preventDefault();
+        showClipboardPeek();
+      };
+      button.onpointerup = hideClipboardPeek;
+      button.onpointercancel = hideClipboardPeek;
+      button.onkeydown = (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        if (!peekActive) showClipboardPeek();
+      };
+      button.onkeyup = (event) => {
+        if (event.key === "Enter" || event.key === " ") hideClipboardPeek();
+      };
+      button.onblur = hideClipboardPeek;
+    }
+
+    document.addEventListener("pointerup", hideClipboardPeek);
+    document.addEventListener("pointercancel", hideClipboardPeek);
+
     async function sendClipboard(status, messages) {
       try {
         const image = await readClipboardImage();
@@ -1821,6 +1994,7 @@
       for (const item of sessions) connectPCSession(item);
       document.querySelector("#pcStatus").textContent = "Scan QR code to connect.";
       document.querySelector("#sendPC").onclick = () => sendClipboard(document.querySelector("#pcStatus"), document.querySelector("#pcMessages"));
+      setupPeekButton(document.querySelector("#peekPC"));
     }
 
     function deviceLabel() {
@@ -1901,6 +2075,7 @@
         });
 
       document.querySelector("#sendClipboard").onclick = () => sendClipboard(status, messages);
+      setupPeekButton(document.querySelector("#peekClipboard"));
     }
 
     if (sid) {

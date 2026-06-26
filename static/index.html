@@ -264,25 +264,43 @@
       border: 1px solid #d9dbd2;
       border-radius: 8px;
       background: #fff;
-      padding: 16px;
+      padding: 0 16px 16px;
       align-self: start;
     }
     .pane-toggle {
       display: none;
     }
+    .pane-controls {
+      display: none;
+    }
     .pane-head {
+      position: sticky;
+      top: 0;
+      z-index: 1;
       display: flex;
       justify-content: space-between;
       gap: 12px;
-      align-items: baseline;
-      margin-top: 14px;
-      margin-bottom: 12px;
+      align-items: center;
+      margin: 0 -16px 12px;
+      padding: 16px;
+      background: #fff;
     }
     .pane-head h2 {
       margin: 0;
       font-size: 18px;
       line-height: 1.2;
       letter-spacing: 0;
+    }
+    .pane-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .pane-title svg {
+      width: 18px;
+      height: 18px;
+      color: #174ea6;
+      stroke-width: 2.4;
     }
     .device-count {
       color: #5c6257;
@@ -601,62 +619,63 @@
       body.pc-mode .notice {
         min-height: 86px;
       }
+      .pane-controls {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+      }
       .pane-toggle {
-        position: fixed;
-        top: 10px;
-        z-index: 6;
-        width: 34px;
-        min-height: 40px;
-        padding: 0;
-        display: grid;
-        place-items: center;
+        width: min(50%, 190px);
+        max-width: 190px;
+        min-height: 46px;
+        padding: 0 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
         border: 1px solid #d9dbd2;
-        border-left: 0;
-        border-radius: 0 8px 8px 0;
+        border-radius: 8px;
         background: #fff;
         color: #174ea6;
-      }
-      .session-pane-toggle {
-        left: 0;
-        border-left: 0;
-        border-radius: 0 8px 8px 0;
-      }
-      .device-pane-toggle {
-        right: 0;
-        border-right: 0;
-        border-left: 1px solid #d9dbd2;
-        border-radius: 8px 0 0 8px;
+        font-size: 13px;
       }
       .pane-toggle svg {
         width: 18px;
         height: 18px;
         stroke-width: 2.5;
       }
+      body.session-pane-open .session-pane-toggle,
+      body.device-pane-open .device-pane-toggle {
+        background: #174ea6;
+        border-color: #174ea6;
+        color: #fff;
+      }
       body.mobile-mode .desktop-pane,
       body.pc-mode .desktop-pane {
         display: none;
         position: fixed;
-        top: 0;
+        top: auto;
+        right: 0;
+        bottom: 0;
+        left: 0;
         z-index: 5;
-        width: min(86vw, 320px);
-        min-height: 100svh;
+        width: 100vw;
+        max-height: min(70svh, 520px);
+        min-height: 0;
         overflow-y: auto;
-        border-top: 0;
+        border: 1px solid #d9dbd2;
+        border-right: 0;
         border-bottom: 0;
+        border-left: 0;
+        border-radius: 8px 8px 0 0;
       }
       body.mobile-mode .session-pane,
       body.pc-mode .session-pane {
-        left: 0;
-        width: min(86vw, 320px);
-        border-left: 0;
-        border-radius: 0 8px 8px 0;
+        right: 0;
       }
       body.mobile-mode .device-pane,
       body.pc-mode .device-pane {
-        width: min(86vw, 320px);
         right: 0;
-        border-right: 0;
-        border-radius: 8px 0 0 8px;
       }
       body.mobile-mode.session-pane-open .session-pane,
       body.pc-mode.session-pane-open .session-pane,
@@ -664,15 +683,11 @@
       body.pc-mode.device-pane-open .device-pane {
         display: block;
       }
-      body.mobile-mode.session-pane-open .session-pane-toggle,
-      body.pc-mode.session-pane-open .session-pane-toggle,
-      body.mobile-mode.session-pane-open .device-pane-toggle,
-      body.pc-mode.session-pane-open .device-pane-toggle,
-      body.mobile-mode.device-pane-open .session-pane-toggle,
-      body.pc-mode.device-pane-open .session-pane-toggle,
-      body.mobile-mode.device-pane-open .device-pane-toggle,
-      body.pc-mode.device-pane-open .device-pane-toggle {
-        display: none;
+      @media (hover: none) and (pointer: coarse) {
+        .edit-session-button,
+        .edit-device-button {
+          opacity: 1;
+        }
       }
     }
     @media (prefers-color-scheme: dark) {
@@ -732,13 +747,16 @@
         background: #1b1d18;
         border-color: #34372f;
       }
+      .pane-head {
+        background: #1b1d18;
+      }
+      .pane-title svg {
+        color: #8ab4f8;
+      }
       .pane-toggle {
         background: #1b1d18;
         border-color: #34372f;
         color: #8ab4f8;
-      }
-      .device-pane-toggle {
-        border-left-color: #34372f;
       }
       .device-count,
       .device-meta,
@@ -798,6 +816,28 @@
 <body>
   <div id="appLayout" class="app-layout">
     <main>
+      <div class="pane-controls" aria-label="Panels">
+        <button id="sessionPaneToggle" class="pane-toggle session-pane-toggle hidden" type="button" aria-label="Open sessions" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M8 6h13"></path>
+            <path d="M8 12h13"></path>
+            <path d="M8 18h13"></path>
+            <path d="M3 6h.01"></path>
+            <path d="M3 12h.01"></path>
+            <path d="M3 18h.01"></path>
+          </svg>
+          <span>Sessions</span>
+        </button>
+
+        <button id="devicePaneToggle" class="pane-toggle device-pane-toggle hidden" type="button" aria-label="Open devices" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <rect x="7" y="2" width="10" height="20" rx="2"></rect>
+            <path d="M11 18h2"></path>
+          </svg>
+          <span>Devices</span>
+        </button>
+      </div>
+
       <header class="app-header">
         <h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>
         <p class="tagline">Secure clipboard handoff</p>
@@ -869,21 +909,19 @@
       </footer>
     </main>
 
-    <button id="sessionPaneToggle" class="pane-toggle session-pane-toggle hidden" type="button" aria-label="Open sessions" aria-expanded="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-        <path d="m9 18 6-6-6-6"></path>
-      </svg>
-    </button>
-
-    <button id="devicePaneToggle" class="pane-toggle device-pane-toggle hidden" type="button" aria-label="Open devices" aria-expanded="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-        <path d="m15 18-6-6 6-6"></path>
-      </svg>
-    </button>
-
     <aside id="sessionPane" class="desktop-pane session-pane hidden" aria-label="Session manager">
       <div class="pane-head">
-        <h2>Sessions</h2>
+        <h2 class="pane-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M8 6h13"></path>
+            <path d="M8 12h13"></path>
+            <path d="M8 18h13"></path>
+            <path d="M3 6h.01"></path>
+            <path d="M3 12h.01"></path>
+            <path d="M3 18h.01"></path>
+          </svg>
+          <span>Sessions</span>
+        </h2>
         <button id="addSession" class="add-session" type="button">Add session</button>
       </div>
       <div id="sessionList" class="session-list"></div>
@@ -891,7 +929,13 @@
 
     <aside id="devicePane" class="desktop-pane device-pane hidden" aria-label="Device manager">
       <div class="pane-head">
-        <h2>Devices</h2>
+        <h2 class="pane-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <rect x="7" y="2" width="10" height="20" rx="2"></rect>
+            <path d="M11 18h2"></path>
+          </svg>
+          <span>Devices</span>
+        </h2>
         <span id="deviceCount" class="device-count">0 connected</span>
       </div>
       <div id="deviceList" class="device-list"></div>
@@ -1028,6 +1072,13 @@
       }).format(date)}`;
     }
 
+    function onMiddleClick(event, action) {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      event.stopPropagation();
+      action();
+    }
+
     function renderSessions() {
       sessionList.replaceChildren(...sessions.map(sessionRow));
     }
@@ -1044,6 +1095,7 @@
           openSessionModal(session);
         } else {
           selectSession(session, true);
+          setPaneOpen("session", false);
         }
       };
       row.onkeydown = (event) => {
@@ -1053,9 +1105,14 @@
             openSessionModal(session);
           } else {
             selectSession(session, true);
+            setPaneOpen("session", false);
           }
         }
       };
+      row.onmousedown = (event) => {
+        if (event.button === 1) event.preventDefault();
+      };
+      row.onauxclick = (event) => onMiddleClick(event, () => deleteSession(session));
 
       const status = document.createElement("span");
       status.className = "session-status";
@@ -1204,6 +1261,10 @@
           openDeviceModal(device);
         }
       };
+      row.onmousedown = (event) => {
+        if (event.button === 1) event.preventDefault();
+      };
+      row.onauxclick = (event) => onMiddleClick(event, () => deleteDevice(device));
 
       const status = document.createElement("span");
       status.className = `device-status ${device.connected ? "online" : "offline"}`;
@@ -1275,11 +1336,19 @@
     }
 
     async function disconnectActiveDevice() {
-      if (!activeDevice || activeDevice.id === activeDeviceIDs.get(sid)) return;
+      await deleteDevice(activeDevice);
+    }
+
+    async function deleteDevice(device) {
+      if (!device) return;
+      if (device.id === activeDeviceIDs.get(sid)) {
+        showNotice("Current device cannot be deleted", "error", "");
+        return;
+      }
       try {
-        await postJSON(`/api/session/${encodeURIComponent(sid)}/devices/${encodeURIComponent(activeDevice.id)}/disconnect`);
+        await postJSON(`/api/session/${encodeURIComponent(sid)}/devices/${encodeURIComponent(device.id)}/disconnect`);
         showNotice("Device deleted", "success", "");
-        closeModal();
+        if (activeDevice && activeDevice.id === device.id) closeModal();
       } catch (err) {
         showNotice(err.message, "error", "");
       }

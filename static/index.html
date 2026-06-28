@@ -1809,24 +1809,29 @@
       return new Blob(chunks, { type: mime });
     }
 
-    async function readClipboardImage() {
-      if (!navigator.clipboard.read) return null;
+    async function readClipboardContent() {
+      // ponytail: one read prevents iOS from asking Paste twice; use readText only when read() is missing.
+      if (!navigator.clipboard.read) return { type: "text", text: await navigator.clipboard.readText() };
       const items = await navigator.clipboard.read();
+      let text = "";
       for (const item of items) {
         const type = item.types.find((candidate) => candidate === "image/png");
         if (!type) continue;
         const blob = await item.getType(type);
-        return { mime: type, data: await blobToBase64(blob) };
+        return { type: "image", image: { mime: type, data: await blobToBase64(blob) } };
       }
-      return null;
+      for (const item of items) {
+        const type = item.types.find((candidate) => candidate === "text/plain");
+        if (!type) continue;
+        const blob = await item.getType(type);
+        text = await blob.text();
+        break;
+      }
+      return { type: "text", text };
     }
 
     async function readClipboardPreview() {
-      try {
-        const image = await readClipboardImage();
-        if (image) return { type: "image", image };
-      } catch (_) {}
-      return { type: "text", text: await navigator.clipboard.readText() };
+      return readClipboardContent();
     }
 
     async function writeImageClipboard(image) {
@@ -2047,31 +2052,23 @@
     });
 
     async function sendClipboard(status, messages) {
+      let content;
       try {
-        const image = await readClipboardImage();
-        if (image) {
-          await postJSON(`/api/session/${encodeURIComponent(sid)}/clipboard`, await encryptPayload({ type: "image", mime: image.mime, data: image.data }));
-          status.textContent = "Sent.";
-          addMessage(messages, "sent", imageSummary(image));
-          showNotice("Image sent", "success", imageSummary(image));
-          return;
-        }
-      } catch (err) {
-        if (err.message === "secure link key unavailable") {
-          showNotice(err.message, "error", "");
-          return;
-        }
-      }
-
-      let text = "";
-      try {
-        text = await navigator.clipboard.readText();
+        content = await readClipboardContent();
       } catch (_) {
         status.textContent = "Clipboard access blocked.";
         showNotice("Clipboard access blocked", "error", "");
         return;
       }
       try {
+        if (content.type === "image") {
+          await postJSON(`/api/session/${encodeURIComponent(sid)}/clipboard`, await encryptPayload({ type: "image", mime: content.image.mime, data: content.image.data }));
+          status.textContent = "Sent.";
+          addMessage(messages, "sent", imageSummary(content.image));
+          showNotice("Image sent", "success", imageSummary(content.image));
+          return;
+        }
+        const text = content.text || "";
         await postJSON(`/api/session/${encodeURIComponent(sid)}/clipboard`, await encryptPayload({ type: "text", text }));
         status.textContent = "Sent.";
         addMessage(messages, "sent", text);

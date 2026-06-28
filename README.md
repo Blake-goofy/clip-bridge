@@ -12,7 +12,7 @@ Open `http://localhost:8080`, then scan the QR code or copy the join link on ano
 
 ## Features
 
-- Short word-code join links and QR codes.
+- Short join links and QR codes.
 - Multi-device sessions. The first browser is `Device1`; later devices are `Device2`, `Device3`, and so on.
 - Shared session and device managers on every device. Desktop shows sessions on the left and devices on the right; mobile has separate edge toggles.
 - Device rename and delete actions sync to all connected devices.

@@ -3,10 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,30 +15,15 @@ import (
 	"github.com/coder/websocket"
 )
 
-func TestSessionIDUsesWordCode(t *testing.T) {
+func TestSessionIDUsesURLSafeToken(t *testing.T) {
 	h := newHub()
 	sid, _, err := h.createSession()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^[a-z]+(-[a-z]+){4}$`).MatchString(sid) {
-		t.Fatalf("session id is not a five-word code: %q", sid)
-	}
-}
-
-func TestSessionWordListIsComplete(t *testing.T) {
-	if len(sessionWords) != 256 {
-		t.Fatalf("got %d session words, want 256", len(sessionWords))
-	}
-	seen := make(map[string]bool, len(sessionWords))
-	for _, word := range sessionWords {
-		if word == "" {
-			t.Fatal("session word list contains an empty word")
-		}
-		if seen[word] {
-			t.Fatalf("session word list contains duplicate %q", word)
-		}
-		seen[word] = true
+	raw, err := base64.RawURLEncoding.DecodeString(sid)
+	if err != nil || len(raw) != 9 {
+		t.Fatalf("session id is not a 9-byte URL-safe token: sid=%q len=%d err=%v", sid, len(raw), err)
 	}
 }
 

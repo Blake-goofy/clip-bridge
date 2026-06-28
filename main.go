@@ -611,7 +611,7 @@ func (h *hub) createSession() (string, string, error) {
 	now := h.now()
 	h.cleanupLocked(now)
 	for i := 0; i < 5; i++ {
-		sid, err := randomSessionID()
+		sid, err := randomToken(9)
 		if err != nil {
 			return "", "", err
 		}
@@ -1069,7 +1069,7 @@ func (h *hub) rotateJoinLink(sid, token string) (string, error) {
 		return "", errUnauthorized
 	}
 	for i := 0; i < 5; i++ {
-		newSID, err := randomSessionID()
+		newSID, err := randomToken(9)
 		if err != nil {
 			return "", err
 		}

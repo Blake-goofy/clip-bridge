@@ -1030,6 +1030,7 @@
     let pendingCopyText = "";
     let pendingCopyImage = null;
     let notifDismissTimer = null;
+    let noticeHiddenQR = null;
     const pcLinks = new Map();
     const deviceCache = new Map();
     const joinRequestCache = new Map();
@@ -1049,11 +1050,45 @@
 
     function setupQRButton(button, wrap) {
       button.onclick = () => {
-        const hidden = wrap.classList.toggle("collapsed");
-        button.textContent = hidden ? "Show QR" : "Hide QR";
-        button.setAttribute("aria-expanded", hidden ? "false" : "true");
+        delete wrap.dataset.noticeHidden;
+        if (noticeHiddenQR && noticeHiddenQR.wrap === wrap) noticeHiddenQR = null;
+        setQRCollapsed(button, wrap, !wrap.classList.contains("collapsed"));
       };
       button.setAttribute("aria-expanded", "true");
+    }
+
+    function setQRCollapsed(button, wrap, hidden) {
+      wrap.classList.toggle("collapsed", hidden);
+      button.textContent = hidden ? "Show QR" : "Hide QR";
+      button.setAttribute("aria-expanded", hidden ? "false" : "true");
+    }
+
+    function activeQRControls() {
+      const mobilePage = pageRole === "mobile";
+      const button = document.querySelector(mobilePage ? "#toggleMobileQR" : "#toggleQR");
+      const wrap = document.querySelector(mobilePage ? "#mobileQrWrap" : "#qrWrap");
+      return button && wrap ? { button, wrap } : null;
+    }
+
+    function noticeNeedsQRHidden(state, content) {
+      return state === "peek" || (content && content.type === "image") || String(content || "").length > 140;
+    }
+
+    function hideQRForNotice() {
+      const qr = activeQRControls();
+      if (!qr || qr.wrap.classList.contains("collapsed")) return;
+      qr.wrap.dataset.noticeHidden = "true";
+      noticeHiddenQR = qr;
+      setQRCollapsed(qr.button, qr.wrap, true);
+    }
+
+    function restoreNoticeQR() {
+      if (!noticeHiddenQR) return;
+      const qr = noticeHiddenQR;
+      noticeHiddenQR = null;
+      if (qr.wrap.dataset.noticeHidden !== "true") return;
+      delete qr.wrap.dataset.noticeHidden;
+      setQRCollapsed(qr.button, qr.wrap, false);
     }
 
     function plural(count, word) {
@@ -1644,16 +1679,20 @@
       renderNoticeIcon(icon, state);
       statusText.textContent = message;
       renderNoticeContent(data, content);
+      if (noticeNeedsQRHidden(state, content)) {
+        hideQRForNotice();
+      } else {
+        restoreNoticeQR();
+      }
 
       if (!sticky && state !== "pending") {
-        notifDismissTimer = setTimeout(() => {
-          notice.classList.remove("show");
-        }, 2500);
+        notifDismissTimer = setTimeout(hideNotice, 2500);
       }
     }
 
     function renderNoticeIcon(container, state) {
       container.replaceChildren();
+      if (!state) return;
       if (state === "peek") {
         container.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
         return;
@@ -1666,7 +1705,12 @@
         clearTimeout(notifDismissTimer);
         notifDismissTimer = null;
       }
-      document.querySelector("#copyNotif").classList.remove("show");
+      const notice = document.querySelector("#copyNotif");
+      notice.classList.remove("show", "success", "pending", "peek", "error");
+      renderNoticeIcon(document.querySelector("#notifIcon"), "");
+      document.querySelector("#notifStatus").textContent = "";
+      renderNoticeContent(document.querySelector("#notifData"), "");
+      restoreNoticeQR();
     }
 
     function renderNoticeContent(container, content) {

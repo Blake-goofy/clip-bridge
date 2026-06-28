@@ -1023,6 +1023,8 @@
     let activeDevice = null;
     let peekActive = false;
     let peekToken = 0;
+    let peekHideTimer = null;
+    const peekAutoHideMs = 2500;
     let pageRole = "";
     let sessions = loadSessions();
     let pendingCopyText = "";
@@ -1960,7 +1962,19 @@
       if (event.type === "clipboard.text") await receiveText(status, messages, event.text || "");
     }
 
-    async function showClipboardPeek() {
+    function clearPeekHideTimer() {
+      if (!peekHideTimer) return;
+      clearTimeout(peekHideTimer);
+      peekHideTimer = null;
+    }
+
+    function scheduleHideClipboardPeek() {
+      clearPeekHideTimer();
+      peekHideTimer = setTimeout(hideClipboardPeek, peekAutoHideMs);
+    }
+
+    async function showClipboardPeek(autoHide) {
+      clearPeekHideTimer();
       peekActive = true;
       const token = ++peekToken;
       showNotice("", "peek", "", true);
@@ -1973,29 +1987,47 @@
             image: preview.image,
             alt: imageSummary(preview.image)
           }, true);
+          if (autoHide) scheduleHideClipboardPeek();
           return;
         }
         showNotice("", "peek", preview.text, true);
+        if (autoHide) scheduleHideClipboardPeek();
       } catch (_) {
-        if (peekActive && token === peekToken) showNotice("Clipboard access blocked", "error", "", true);
+        if (peekActive && token === peekToken) {
+          showNotice("Clipboard access blocked", "error", "", true);
+          if (autoHide) scheduleHideClipboardPeek();
+        }
       }
     }
 
     function hideClipboardPeek() {
       if (!peekActive) return;
+      clearPeekHideTimer();
       peekActive = false;
       peekToken++;
       hideNotice();
+    }
+
+    function isTimedPeek(event) {
+      // ponytail: coarse pointer is enough for phones; split per platform only if hybrid devices need different peek behavior.
+      return event.pointerType !== "mouse" || window.matchMedia("(hover: none) and (pointer: coarse)").matches;
     }
 
     function setupPeekButton(button) {
       button.onpointerdown = (event) => {
         if (event.pointerType === "mouse" && event.button !== 0) return;
         event.preventDefault();
-        showClipboardPeek();
+        showClipboardPeek(isTimedPeek(event));
       };
-      button.onpointerup = hideClipboardPeek;
-      button.onpointercancel = hideClipboardPeek;
+      button.onpointerup = (event) => {
+        if (!isTimedPeek(event)) hideClipboardPeek();
+      };
+      button.onpointercancel = (event) => {
+        if (!isTimedPeek(event)) hideClipboardPeek();
+      };
+      button.oncontextmenu = (event) => {
+        if (window.matchMedia("(hover: none) and (pointer: coarse)").matches) event.preventDefault();
+      };
       button.onkeydown = (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
@@ -2007,8 +2039,12 @@
       button.onblur = hideClipboardPeek;
     }
 
-    document.addEventListener("pointerup", hideClipboardPeek);
-    document.addEventListener("pointercancel", hideClipboardPeek);
+    document.addEventListener("pointerup", (event) => {
+      if (!isTimedPeek(event)) hideClipboardPeek();
+    });
+    document.addEventListener("pointercancel", (event) => {
+      if (!isTimedPeek(event)) hideClipboardPeek();
+    });
 
     async function sendClipboard(status, messages) {
       try {

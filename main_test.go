@@ -619,19 +619,11 @@ func TestImageClipboardPayloadRelayAndValidation(t *testing.T) {
 	}
 }
 
-func TestAnalyticsCountsClipboardShareWithoutContent(t *testing.T) {
+func TestAnalyticsTracksOnlyJoinsAndClipboardShares(t *testing.T) {
 	a := newApp()
 	a.analytics.path = filepath.Join(t.TempDir(), "analytics.jsonl")
 	fixedNow := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
 	a.hub.now = func() time.Time { return fixedNow }
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := httptest.NewRecorder()
-	a.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("index status = %d", w.Code)
-	}
-	analyticsCookie := findCookie(t, w.Result().Cookies(), analyticsCookieName)
 
 	sid, pcToken, err := a.hub.createSession()
 	if err != nil {
@@ -650,47 +642,213 @@ func TestAnalyticsCountsClipboardShareWithoutContent(t *testing.T) {
 	if _, err := a.hub.connectMobile(sid, mobileToken); err != nil {
 		t.Fatal(err)
 	}
+	a.recordAnalytics("device_joined")
 
 	secret := "secret clipboard text"
-	req = httptest.NewRequest(http.MethodPost, "/api/session/"+sid+"/clipboard", strings.NewReader(`{"text":`+strconv.Quote(secret)+`}`))
-	req.AddCookie(analyticsCookie)
+	req := httptest.NewRequest(http.MethodPost, "/api/session/"+sid+"/clipboard", strings.NewReader(`{"text":`+strconv.Quote(secret)+`}`))
 	req.AddCookie(&http.Cookie{Name: mobileCookieName(sid), Value: mobileToken})
-	w = httptest.NewRecorder()
+	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("clipboard status = %d", w.Code)
 	}
 
-	summary, err := a.analyticsSummary()
+	summary, err := a.analyticsSummary("30")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.TotalVisits != 1 || summary.ClipboardShares != 1 || summary.UniqueVisitors != 1 || summary.ActiveToday != 1 {
-		t.Fatalf("summary = %+v, want one visit/share/visitor active today", summary)
+	if summary.ClipboardShares != 1 || summary.DevicesJoined != 1 {
+		t.Fatalf("summary = %+v, want one share and one joined device", summary)
+	}
+	if len(summary.Daily) != 1 || summary.Daily[0].ClipboardShares != 1 || summary.Daily[0].DevicesJoined != 1 {
+		t.Fatalf("daily summary = %+v, want one share and one joined device today", summary.Daily)
 	}
 	b, err := os.ReadFile(a.analytics.path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	logged := string(b)
-	if !strings.Contains(logged, "clipboard_shared") {
-		t.Fatal("analytics log missing clipboard share event")
+	if !strings.Contains(logged, "device_joined") || !strings.Contains(logged, "clipboard_shared") {
+		t.Fatalf("analytics log missing expected events: %s", logged)
 	}
-	if strings.Contains(logged, secret) || strings.Contains(logged, "clipboard.text") {
-		t.Fatalf("analytics log stored clipboard content or relay event: %s", logged)
+	for _, forbidden := range []string{secret, sid, mobileToken, "clipboard.text", "visitorHash", "sessionHash", `"t"`, `"event"`} {
+		if strings.Contains(logged, forbidden) {
+			t.Fatalf("analytics log stored %q: %s", forbidden, logged)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(logged), "\n") {
+		var e analyticsLogEvent
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("invalid analytics json line %q: %v", line, err)
+		}
+		if e.Date != "2026-06-29" || !knownAnalyticsEvent(e.Event) {
+			t.Fatalf("unexpected analytics event: %+v", e)
+		}
+	}
+}
+
+func TestAnalyticsSummaryRangeFiltersAndBackfillsDays(t *testing.T) {
+	a := newApp()
+	a.analytics.path = filepath.Join(t.TempDir(), "analytics.jsonl")
+	a.hub.now = func() time.Time { return time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC) }
+	log := strings.Join([]string{
+		`{"d":"2026-06-20","e":"clipboard_shared"}`,
+		`{"t":"2026-06-25T09:00:00Z","event":"clipboard_shared"}`,
+		`{"d":"2026-06-29","e":"device_joined"}`,
+		`{"d":"2026-06-29","e":"ignored"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(a.analytics.path, []byte(log), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := a.analyticsSummary("7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Range != "7" || summary.RangeLabel != "Last 7 days" {
+		t.Fatalf("range = %q %q, want 7 / Last 7 days", summary.Range, summary.RangeLabel)
+	}
+	if summary.ClipboardShares != 1 || summary.DevicesJoined != 1 {
+		t.Fatalf("summary = %+v, want one recent share and join", summary)
+	}
+	if len(summary.ChartDays) != 7 {
+		t.Fatalf("chart days = %d, want 7", len(summary.ChartDays))
+	}
+	if summary.ChartDays[0].Date != "2026-06-23" || summary.ChartDays[6].Date != "2026-06-29" {
+		t.Fatalf("chart range = %s..%s, want 2026-06-23..2026-06-29", summary.ChartDays[0].Date, summary.ChartDays[6].Date)
+	}
+	if !summary.Chart.HasData || summary.Chart.SharesLine == "" || summary.Chart.JoinsLine == "" {
+		t.Fatalf("chart = %+v, want line data", summary.Chart)
+	}
+
+	all, err := a.analyticsSummary("all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.ClipboardShares != 2 || all.DevicesJoined != 1 {
+		t.Fatalf("all summary = %+v, want all tracked events", all)
+	}
+	if all.ChartDays[0].Date != "2026-06-20" {
+		t.Fatalf("all chart starts %s, want first event day", all.ChartDays[0].Date)
+	}
+}
+
+func TestAnalyticsPageRendersDashboard(t *testing.T) {
+	a := newApp()
+	a.analytics.path = filepath.Join(t.TempDir(), "analytics.jsonl")
+	a.hub.now = func() time.Time { return time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC) }
+	if err := os.WriteFile(a.analytics.path, []byte(`{"d":"2026-06-29","e":"clipboard_shared"}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/analytics?range=7", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("analytics status = %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`class="analytics-dashboard"`,
+		`<a class="home-link" href="/"><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</a>`,
+		`class="dashboard-toolbar"`,
+		`Analytics trend`,
+		`href="/analytics?range=7" aria-current="page"`,
+		"Clipboard shares",
+		"Devices joined",
+		"color: #fff;",
+		`<footer class="site-footer">`,
+		`<a href="/">Home</a> | <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a>`,
+		"<polyline",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("analytics page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "htmx") {
+		t.Fatal("analytics page should not add htmx for a static dashboard")
+	}
+	if strings.Contains(body, "Successful joins and clipboard shares. Nothing user-identifying.") {
+		t.Fatal("analytics page should not render the old subtitle")
+	}
+	if strings.Contains(body, "Blake Becker") {
+		t.Fatal("analytics footer should not include author text")
+	}
+	csp := w.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "style-src 'nonce-") || !strings.Contains(csp, "img-src 'self'") {
+		t.Fatalf("analytics CSP = %q", csp)
+	}
+}
+
+func TestDocumentPagesUseDarkThemeAndFooter(t *testing.T) {
+	a := newApp()
+	for _, tt := range []struct {
+		path          string
+		title         string
+		wantFooter    string
+		forbidSelfRef string
+	}{
+		{
+			path:          "/privacy",
+			title:         "Privacy Policy",
+			wantFooter:    `<a href="/">Home</a> | <a href="/analytics">Analytics</a> | <a href="/terms">Terms</a> |`,
+			forbidSelfRef: `<a href="/privacy">Privacy</a>`,
+		},
+		{
+			path:          "/terms",
+			title:         "Terms of Service",
+			wantFooter:    `<a href="/">Home</a> | <a href="/analytics">Analytics</a> | <a href="/privacy">Privacy</a> |`,
+			forbidSelfRef: `<a href="/terms">Terms</a>`,
+		},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", tt.path, w.Code)
+		}
+		body := w.Body.String()
+		for _, want := range []string{
+			"<title>" + tt.title + " - ClipBridge</title>",
+			`<main class="document-page">`,
+			`<a class="page-brand" href="/"><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</a>`,
+			"background: #181a17;",
+			"color: #fff;",
+			"justify-content: center;",
+			tt.wantFooter,
+			"Source code",
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s missing %q", tt.path, want)
+			}
+		}
+		if strings.Contains(body, tt.forbidSelfRef) {
+			t.Fatalf("%s footer links to itself", tt.path)
+		}
+		if strings.Contains(body, "Blake Becker") {
+			t.Fatalf("%s footer should not include author text", tt.path)
+		}
+		csp := w.Header().Get("Content-Security-Policy")
+		if !strings.Contains(csp, "style-src 'nonce-") || !strings.Contains(csp, "img-src 'self'") {
+			t.Fatalf("%s CSP = %q", tt.path, csp)
+		}
 	}
 }
 
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
+	ui := indexHTML + appCSS + appJS
 	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "Add link", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout", "copyConnectURL", "connectURL", "copy-link", "?fragment=", "qrQuery", "session-select", "session-delete", "reveal-delete", "swipeStartX", "readClipboardImage"} {
-		if strings.Contains(indexHTML, old) {
+		if strings.Contains(ui, old) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<script nonce="{{NONCE}}" src="/qrcode.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", "Blake Becker |", "Analytics", "Privacy", "Terms", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardContent", "readClipboardPreview", "text/plain", "showClipboardPeek", "setupPeekButton", "peekAutoHideMs = 2500", "noticeHiddenQR", "dataset.noticeHidden", "setTimeout(hideNotice, 2500)", "(hover: none) and (pointer: coarse)", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")", "position: sticky", "onMiddleClick", "onauxclick", "deleteDevice(device)", "width: 100vw", "border-radius: 8px 8px 0 0"} {
-		if !strings.Contains(indexHTML, want) {
+	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="stylesheet" href="/app.css">`, `<script src="/qrcode.js"></script>`, `<script src="/app.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", `class="site-footer"`, "grid-template-rows: minmax(0, 1fr) auto", "min-height: 0", ".app-layout.pc-mode .site-footer", ".site-footer a:hover", "text-decoration: underline", "Analytics", "Privacy", "Terms", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardContent", "readClipboardPreview", "text/plain", "showClipboardPeek", "setupPeekButton", "peekAutoHideMs = 2500", "noticeHiddenQR", "dataset.noticeHidden", "setTimeout(hideNotice, 2500)", "(hover: none) and (pointer: coarse)", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")", "position: sticky", "onMiddleClick", "onauxclick", "deleteDevice(device)", "width: 100vw", "border-radius: 8px 8px 0 0"} {
+		if !strings.Contains(ui, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}
+	}
+	if strings.Contains(indexHTML, "Blake Becker") {
+		t.Fatal("index footer should not include author text")
 	}
 }
 
@@ -699,8 +857,11 @@ func TestIndexCSPAllowsRenderedImagePreviews(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)
-	if got := w.Header().Get("Content-Security-Policy"); !strings.Contains(got, "img-src 'self' data:") {
-		t.Fatalf("CSP = %q, want data: image previews allowed", got)
+	got := w.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"img-src 'self' data:", "style-src 'self'", "script-src 'self'"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("CSP = %q, want %q", got, want)
+		}
 	}
 }
 
@@ -733,6 +894,35 @@ func TestQRCodeJSServed(t *testing.T) {
 	}
 	if body := w.Body.String(); !strings.Contains(body, "ClipBridgeQRCode") || strings.Contains(body, "?fragment=") {
 		t.Fatal("qrcode js should expose local QR renderer without fragment transport")
+	}
+}
+
+func TestAppAssetsServed(t *testing.T) {
+	a := newApp()
+	tests := []struct {
+		path        string
+		contentType string
+		markers     []string
+	}{
+		{path: "/app.css", contentType: "text/css; charset=utf-8", markers: []string{".app-layout", ".notice.peek", "body.pc-mode .desktop-pane"}},
+		{path: "/app.js", contentType: "application/javascript; charset=utf-8", markers: []string{"encryptedClipboardMIME", "connectPCSession", "readClipboardContent"}},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", tt.path, w.Code)
+		}
+		if got := w.Header().Get("Content-Type"); got != tt.contentType {
+			t.Fatalf("%s content type = %q", tt.path, got)
+		}
+		body := w.Body.String()
+		for _, marker := range tt.markers {
+			if !strings.Contains(body, marker) {
+				t.Fatalf("%s is missing marker %q", tt.path, marker)
+			}
+		}
 	}
 }
 

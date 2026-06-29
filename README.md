@@ -20,7 +20,7 @@ Open `http://localhost:8080`, then scan the QR code or copy the join link on ano
 - The original browser can add, select, and close multiple join links.
 - The original browser remembers its last session locally and can resume while the server still has it.
 - Clipboard images are relayed as PNG payloads with a 5 MiB decoded size limit.
-- Anonymous aggregate analytics for visits, sessions, device joins, and successful clipboard shares.
+- Minimal aggregate analytics for successful device joins and clipboard shares.
 
 ## Deploy
 
@@ -33,7 +33,7 @@ Open `http://localhost:8080`, then scan the QR code or copy the join link on ano
 
 - No accounts, database, or third-party frontend assets.
 - Clipboard text and images are encrypted in the browser with AES-GCM before relay. The server relays ciphertext in memory and does not log or persist clipboard contents.
-- Analytics use a first-party anonymous cookie. Logs store hashed anonymous browser IDs, event names, timestamps, and hashed session IDs; they do not store clipboard contents, device names, IP addresses, or user agents.
+- Analytics logs store only dates and event names for successful device joins and clipboard shares; they do not store clipboard contents, device names, IP addresses, user agents, browser IDs, or session IDs.
 - Join links keep the encryption key in the URL fragment, which browsers do not send in normal HTTP requests. QR codes are rendered in the browser, so the key is not sent in a QR generation request.
 - A copied link or QR code only starts a pending join; a connected device still has to allow the new device before it receives a session cookie.
 - Pairing auth tokens are HttpOnly cookies.

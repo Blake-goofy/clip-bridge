@@ -1,0 +1,1278 @@
+const pc = document.querySelector("#pc");
+const mobile = document.querySelector("#mobile");
+const appLayout = document.querySelector("#appLayout");
+const sessionPane = document.querySelector("#sessionPane");
+const devicePane = document.querySelector("#devicePane");
+const deviceCount = document.querySelector("#deviceCount");
+const deviceList = document.querySelector("#deviceList");
+const emptyDevices = document.querySelector("#emptyDevices");
+const sessionPaneToggle = document.querySelector("#sessionPaneToggle");
+const devicePaneToggle = document.querySelector("#devicePaneToggle");
+const sessionModal = document.querySelector("#sessionModal");
+const closeSessionModal = document.querySelector("#closeSessionModal");
+const sessionNameInput = document.querySelector("#sessionNameInput");
+const saveSessionName = document.querySelector("#saveSessionName");
+const deleteSessionButton = document.querySelector("#deleteSessionButton");
+const deviceModal = document.querySelector("#deviceModal");
+const closeDeviceModal = document.querySelector("#closeDeviceModal");
+const deviceNameInput = document.querySelector("#deviceNameInput");
+const saveDeviceName = document.querySelector("#saveDeviceName");
+const disconnectDevice = document.querySelector("#disconnectDevice");
+const sessionList = document.querySelector("#sessionList");
+const addSession = document.querySelector("#addSession");
+const encryptedClipboardMIME = "application/vnd.clipbridge.encrypted+json";
+const sessionMatch = location.pathname.match(/^\/s\/([^/]+)$/);
+const storageKey = "clipbridge.sid";
+const sessionsKey = "clipbridge.sessions.v1";
+let sid = sessionMatch ? sessionMatch[1] : "";
+let sessionKey = "";
+let linkURL = "";
+let joined = false;
+let activeSession = null;
+let activeDevice = null;
+let peekActive = false;
+let peekToken = 0;
+let peekHideTimer = null;
+const peekAutoHideMs = 2500;
+let pageRole = "";
+let sessions = loadSessions();
+let pendingCopyText = "";
+let pendingCopyImage = null;
+let notifDismissTimer = null;
+let noticeHiddenQR = null;
+const pcLinks = new Map();
+const deviceCache = new Map();
+const joinRequestCache = new Map();
+const activeDeviceIDs = new Map();
+
+setupQRButton(document.querySelector("#toggleQR"), document.querySelector("#qrWrap"));
+setupQRButton(document.querySelector("#toggleMobileQR"), document.querySelector("#mobileQrWrap"));
+for (const qr of [document.querySelector("#qrWrap"), document.querySelector("#mobileQrWrap")]) {
+  qr.onclick = copySelectedLink;
+  qr.onkeydown = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      copySelectedLink();
+    }
+  };
+}
+
+function setupQRButton(button, wrap) {
+  button.onclick = () => {
+    delete wrap.dataset.noticeHidden;
+    if (noticeHiddenQR && noticeHiddenQR.wrap === wrap) noticeHiddenQR = null;
+    setQRCollapsed(button, wrap, !wrap.classList.contains("collapsed"));
+  };
+  button.setAttribute("aria-expanded", "true");
+}
+
+function setQRCollapsed(button, wrap, hidden) {
+  wrap.classList.toggle("collapsed", hidden);
+  button.textContent = hidden ? "Show QR" : "Hide QR";
+  button.setAttribute("aria-expanded", hidden ? "false" : "true");
+}
+
+function activeQRControls() {
+  const mobilePage = pageRole === "mobile";
+  const button = document.querySelector(mobilePage ? "#toggleMobileQR" : "#toggleQR");
+  const wrap = document.querySelector(mobilePage ? "#mobileQrWrap" : "#qrWrap");
+  return button && wrap ? { button, wrap } : null;
+}
+
+function noticeNeedsQRHidden(state, content) {
+  return state === "peek" || (content && content.type === "image") || String(content || "").length > 140;
+}
+
+function hideQRForNotice() {
+  const qr = activeQRControls();
+  if (!qr || qr.wrap.classList.contains("collapsed")) return;
+  qr.wrap.dataset.noticeHidden = "true";
+  noticeHiddenQR = qr;
+  setQRCollapsed(qr.button, qr.wrap, true);
+}
+
+function restoreNoticeQR() {
+  if (!noticeHiddenQR) return;
+  const qr = noticeHiddenQR;
+  noticeHiddenQR = null;
+  if (qr.wrap.dataset.noticeHidden !== "true") return;
+  delete qr.wrap.dataset.noticeHidden;
+  setQRCollapsed(qr.button, qr.wrap, false);
+}
+
+function plural(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+function cleanName(value, fallback) {
+  const name = String(value || "").trim().replace(/\s+/g, " ");
+  return name || fallback;
+}
+
+function formatConnectedAt(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Connected date unavailable";
+  return `Connected ${new Intl.DateTimeFormat([], {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(date)}`;
+}
+
+function onMiddleClick(event, action) {
+  if (event.button !== 1) return;
+  event.preventDefault();
+  event.stopPropagation();
+  action();
+}
+
+function renderSessions() {
+  sessionList.replaceChildren(...sessions.map(sessionRow));
+}
+
+function sessionRow(session) {
+  const isActive = session.sid === sid;
+  const row = document.createElement("div");
+  row.className = `session-row ${isActive ? "active" : ""}`;
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-label", `${isActive ? "Edit" : "Select"} ${sessionLabel(session)}${isActive ? ", current session" : ""}`);
+  row.onclick = () => {
+    if (isActive) {
+      openSessionModal(session);
+    } else {
+      selectSession(session, true);
+      setPaneOpen("session", false);
+    }
+  };
+  row.onkeydown = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (isActive) {
+        openSessionModal(session);
+      } else {
+        selectSession(session, true);
+        setPaneOpen("session", false);
+      }
+    }
+  };
+  row.onmousedown = (event) => {
+    if (event.button === 1) event.preventDefault();
+  };
+  row.onauxclick = (event) => onMiddleClick(event, () => deleteSession(session));
+
+  const status = document.createElement("span");
+  status.className = "session-status";
+  status.setAttribute("aria-label", isActive ? "Current session" : "Saved session");
+
+  const name = document.createElement("div");
+  name.className = "session-name";
+  name.textContent = sessionLabel(session);
+
+  const edit = document.createElement("button");
+  edit.className = "edit-session-button";
+  edit.type = "button";
+  edit.setAttribute("aria-label", `Edit ${sessionLabel(session)}`);
+  edit.title = `Edit ${sessionLabel(session)}`;
+  edit.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m12 20 9-9-4-4-9 9-2 6 6-2z"></path><path d="m15 7 4 4"></path></svg>`;
+  edit.onclick = (event) => {
+    event.stopPropagation();
+    selectSession(session, true);
+    openSessionModal(session);
+  };
+
+  const meta = document.createElement("div");
+  meta.className = "session-meta";
+  meta.textContent = `${plural(connectedDeviceCount(session.sid), "device")} connected`;
+
+  row.append(status, name, edit, meta);
+  return row;
+}
+
+function sessionLabel(session) {
+  return String((session && session.name) || "").trim() || "Session";
+}
+
+function connectedDeviceCount(sessionSID) {
+  return (deviceCache.get(sessionSID) || []).filter((device) => device.connected).length;
+}
+
+function defaultSessionName(index) {
+  return `Session${index + 1}`;
+}
+
+function nextSessionName() {
+  const used = new Set(sessions.map((session) => sessionLabel(session)));
+  for (let i = 0; i < sessions.length + 100; i++) {
+    const name = defaultSessionName(i);
+    if (!used.has(name)) return name;
+  }
+  return defaultSessionName(sessions.length);
+}
+
+function openSessionModal(session) {
+  activeSession = session;
+  sessionNameInput.value = sessionLabel(session);
+  sessionModal.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    sessionNameInput.focus();
+    sessionNameInput.select();
+  });
+}
+
+function closeSessionModalWindow() {
+  activeSession = null;
+  sessionModal.classList.add("hidden");
+}
+
+async function renameActiveSession() {
+  if (!activeSession) return;
+  const name = cleanName(sessionNameInput.value, sessionLabel(activeSession));
+  try {
+    await postJSON(`/api/session/${encodeURIComponent(activeSession.sid)}/name`, { name });
+    activeSession.name = name;
+    upsertSession(activeSession);
+    showNotice("Session renamed", "success", "");
+    closeSessionModalWindow();
+  } catch (err) {
+    showNotice(err.message, "error", "");
+  }
+}
+
+async function deleteActiveSession() {
+  if (!activeSession) return;
+  const target = activeSession;
+  closeSessionModalWindow();
+  await deleteSession(target);
+}
+
+function renderDevices(devices, joinRequests) {
+  const allDevices = Array.isArray(devices) ? devices : [];
+  const pendingJoins = Array.isArray(joinRequests) ? joinRequests : [];
+  const active = allDevices.find((device) => device.active);
+  if (active) activeDeviceIDs.set(sid, active.id);
+  const connected = allDevices.filter((d) => d.connected).length;
+  deviceCount.textContent = `${plural(connected, "device")} connected`;
+  document.querySelector("#device").textContent = deviceCount.textContent;
+  emptyDevices.classList.toggle("hidden", allDevices.length > 0 || pendingJoins.length > 0);
+  document.querySelector("#pcActions").classList.toggle("hidden", pageRole !== "pc" || connected < 2);
+  deviceList.replaceChildren(...pendingJoins.map(joinRequestRow), ...allDevices.map(deviceRow));
+}
+
+function joinRequestRow(request) {
+  const row = document.createElement("div");
+  row.className = "device-row join-request-row";
+
+  const status = document.createElement("span");
+  status.className = "device-status";
+  status.setAttribute("aria-label", "Waiting for approval");
+
+  const name = document.createElement("div");
+  name.className = "device-name";
+  name.textContent = request.name || "New device";
+
+  const approve = document.createElement("button");
+  approve.className = "approve-join-button";
+  approve.type = "button";
+  approve.textContent = "Allow";
+  approve.onclick = () => approveJoin(request.id);
+
+  const meta = document.createElement("div");
+  meta.className = "device-meta";
+  meta.textContent = formatConnectedAt(request.requestedAt).replace("Connected", "Requested");
+
+  row.append(status, name, approve, meta);
+  return row;
+}
+
+async function approveJoin(requestID) {
+  try {
+    await postJSON(`/api/session/${encodeURIComponent(sid)}/joins/${encodeURIComponent(requestID)}/approve`);
+    showNotice("Device allowed", "success", "");
+  } catch (err) {
+    showNotice(err.message, "error", "");
+  }
+}
+
+function deviceRow(device) {
+  const isActive = device.id === activeDeviceIDs.get(sid);
+  const row = document.createElement("div");
+  row.className = `device-row ${isActive ? "active" : ""}`;
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-label", `Edit ${device.name || "Device"}${isActive ? ", current device" : ""}`);
+  row.onclick = () => openDeviceModal(device);
+  row.onkeydown = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openDeviceModal(device);
+    }
+  };
+  row.onmousedown = (event) => {
+    if (event.button === 1) event.preventDefault();
+  };
+  row.onauxclick = (event) => onMiddleClick(event, () => deleteDevice(device));
+
+  const status = document.createElement("span");
+  status.className = `device-status ${device.connected ? "online" : "offline"}`;
+  status.setAttribute("aria-label", device.connected ? "Connected" : "Disconnected");
+
+  const name = document.createElement("div");
+  name.className = "device-name";
+  name.textContent = `${device.name || "Device"}${isActive ? " (this device)" : ""}`;
+
+  const edit = document.createElement("button");
+  edit.className = "edit-device-button";
+  edit.type = "button";
+  edit.setAttribute("aria-label", `Edit ${device.name || "Device"}`);
+  edit.title = `Edit ${device.name || "Device"}`;
+  edit.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m12 20 9-9-4-4-9 9-2 6 6-2z"></path><path d="m15 7 4 4"></path></svg>`;
+  edit.onclick = (event) => {
+    event.stopPropagation();
+    openDeviceModal(device);
+  };
+
+  const meta = document.createElement("div");
+  meta.className = "device-meta";
+  meta.textContent = formatConnectedAt(device.connectedAt);
+
+  row.append(status, name, edit, meta);
+  return row;
+}
+
+function openDeviceModal(device) {
+  activeDevice = device;
+  const isActive = device.id === activeDeviceIDs.get(sid);
+  deviceNameInput.value = device.name || "Device";
+  disconnectDevice.disabled = isActive;
+  disconnectDevice.title = isActive ? "Current device cannot be deleted" : "";
+  deviceModal.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    deviceNameInput.focus();
+    deviceNameInput.select();
+  });
+}
+
+function closeModal() {
+  activeDevice = null;
+  deviceModal.classList.add("hidden");
+}
+
+async function renameActiveDevice() {
+  if (!activeDevice) return;
+  const name = deviceNameInput.value;
+  try {
+    const isThisDevice = activeDevice.id === activeDeviceIDs.get(sid);
+    let targets = isThisDevice
+      ? sessions
+          .map((session) => ({ sid: session.sid, deviceID: activeDeviceIDs.get(session.sid) }))
+          .filter((target) => target.deviceID)
+      : [{ sid, deviceID: activeDevice.id }];
+    if (targets.length === 0) targets = [{ sid, deviceID: activeDevice.id }];
+    const results = await Promise.allSettled(targets.map((target) =>
+      postJSON(`/api/session/${encodeURIComponent(target.sid)}/devices/${encodeURIComponent(target.deviceID)}/name`, { name })
+    ));
+    if (!results.some((result) => result.status === "fulfilled")) {
+      throw results.find((result) => result.status === "rejected").reason;
+    }
+    showNotice("Device renamed", "success", "");
+    closeModal();
+  } catch (err) {
+    showNotice(err.message, "error", "");
+  }
+}
+
+async function disconnectActiveDevice() {
+  await deleteDevice(activeDevice);
+}
+
+async function deleteDevice(device) {
+  if (!device) return;
+  if (device.id === activeDeviceIDs.get(sid)) {
+    showNotice("Current device cannot be deleted", "error", "");
+    return;
+  }
+  try {
+    await postJSON(`/api/session/${encodeURIComponent(sid)}/devices/${encodeURIComponent(device.id)}/disconnect`);
+    showNotice("Device deleted", "success", "");
+    if (activeDevice && activeDevice.id === device.id) closeModal();
+  } catch (err) {
+    showNotice(err.message, "error", "");
+  }
+}
+
+closeSessionModal.onclick = closeSessionModalWindow;
+saveSessionName.onclick = renameActiveSession;
+deleteSessionButton.onclick = deleteActiveSession;
+sessionNameInput.onkeydown = (event) => {
+  if (event.key === "Enter") renameActiveSession();
+};
+sessionModal.onclick = (event) => {
+  if (event.target === sessionModal) closeSessionModalWindow();
+};
+
+closeDeviceModal.onclick = closeModal;
+saveDeviceName.onclick = renameActiveDevice;
+disconnectDevice.onclick = disconnectActiveDevice;
+deviceNameInput.onkeydown = (event) => {
+  if (event.key === "Enter") renameActiveDevice();
+};
+deviceModal.onclick = (event) => {
+  if (event.target === deviceModal) closeModal();
+};
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (!sessionModal.classList.contains("hidden")) closeSessionModalWindow();
+  if (!deviceModal.classList.contains("hidden")) closeModal();
+});
+
+function setPaneOpen(kind, open) {
+  const isSession = kind === "session";
+  const bodyClass = isSession ? "session-pane-open" : "device-pane-open";
+  const otherClass = isSession ? "device-pane-open" : "session-pane-open";
+  document.body.classList.toggle(bodyClass, open);
+  if (open) document.body.classList.remove(otherClass);
+  const sessionOpen = document.body.classList.contains("session-pane-open");
+  const deviceOpen = document.body.classList.contains("device-pane-open");
+  sessionPaneToggle.setAttribute("aria-expanded", sessionOpen ? "true" : "false");
+  devicePaneToggle.setAttribute("aria-expanded", deviceOpen ? "true" : "false");
+  sessionPaneToggle.setAttribute("aria-label", sessionOpen ? "Close sessions" : "Open sessions");
+  devicePaneToggle.setAttribute("aria-label", deviceOpen ? "Close devices" : "Open devices");
+}
+
+sessionPaneToggle.onclick = () => setPaneOpen("session", !document.body.classList.contains("session-pane-open"));
+devicePaneToggle.onclick = () => setPaneOpen("device", !document.body.classList.contains("device-pane-open"));
+document.addEventListener("click", (event) => {
+  const paneOpen = document.body.classList.contains("session-pane-open") || document.body.classList.contains("device-pane-open");
+  if (
+    (pageRole === "mobile" || pageRole === "pc") &&
+    paneOpen &&
+    !sessionPane.contains(event.target) &&
+    !devicePane.contains(event.target) &&
+    !sessionPaneToggle.contains(event.target) &&
+    !devicePaneToggle.contains(event.target)
+  ) {
+    setPaneOpen("session", false);
+    setPaneOpen("device", false);
+  }
+});
+
+function syncPaneLayout() {
+  if (pageRole !== "mobile" && pageRole !== "pc") return;
+  const wide = window.matchMedia("(min-width: 1180px)").matches;
+  if (pageRole === "mobile") {
+    document.body.classList.toggle("pc-mode", wide);
+    appLayout.classList.toggle("pc-mode", wide);
+  }
+  sessionPaneToggle.classList.toggle("hidden", wide);
+  devicePaneToggle.classList.toggle("hidden", wide);
+  if (wide) {
+    setPaneOpen("session", false);
+    setPaneOpen("device", false);
+  }
+}
+
+window.addEventListener("resize", syncPaneLayout);
+
+function selectedSession() {
+  return sessions.find((session) => session.sid === sid) || null;
+}
+
+function sessionLink(session) {
+  const key = session && session.key ? session.key : sessionKey;
+  const hash = key ? `#k=${encodeURIComponent(key)}` : "";
+  return `${location.origin}/s/${session.sid}${hash}`;
+}
+
+async function copySelectedLink() {
+  const session = selectedSession();
+  const url = session ? sessionLink(session) : linkURL;
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    showNotice("Link copied", "success", url);
+  } catch (_) {
+    showNotice("Copy blocked", "error", url);
+  }
+}
+
+function selectSession(session, updateURL) {
+  sid = session.sid;
+  sessionKey = session.key || sessionKeyFromHash() || randomSessionKey();
+  session.key = sessionKey;
+  upsertSession(session);
+  rememberSID(sid);
+  setJoinLink(sid);
+  renderSessions();
+  renderDevices(deviceCache.get(sid) || [], joinRequestCache.get(sid) || []);
+  if (updateURL) {
+    history.replaceState(null, "", `/s/${encodeURIComponent(sid)}#k=${encodeURIComponent(sessionKey)}`);
+  }
+}
+
+function setJoinLink(joinSID) {
+  if (!joinSID) return;
+  const key = sessionKey || sessionKeyFromHash();
+  const hash = key ? `#k=${encodeURIComponent(key)}` : "";
+  linkURL = `${location.origin}/s/${joinSID}${hash}`;
+  drawQRCode(document.querySelector("#qr"), linkURL);
+  drawQRCode(document.querySelector("#mobileQr"), linkURL);
+}
+
+function drawQRCode(canvas, text) {
+  if (!window.ClipBridgeQRCode) {
+    showNotice("QR renderer unavailable", "error", "");
+    return;
+  }
+  const modules = window.ClipBridgeQRCode.modules(text);
+  const quiet = 4;
+  const scale = Math.max(2, Math.floor(256 / (modules.length + quiet * 2)));
+  const size = (modules.length + quiet * 2) * scale;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = "#000";
+  for (let y = 0; y < modules.length; y++) {
+    for (let x = 0; x < modules.length; x++) {
+      if (modules[y][x]) {
+        ctx.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+      }
+    }
+  }
+}
+
+addSession.onclick = async () => {
+  try {
+    const data = await postJSON("/api/session");
+    const session = { sid: data.sid, key: randomSessionKey(), name: nextSessionName() };
+    upsertSession(session);
+    selectSession(session, true);
+    connectPCSession(session);
+    showNotice("Session added", "success", linkURL);
+  } catch (err) {
+    showNotice(err.message, "error", "");
+  }
+};
+
+async function deleteSession(session) {
+  const old = pcLinks.get(session.sid);
+  if (old) old.closed = true;
+  if (old && old.ws) old.ws.close();
+  pcLinks.delete(session.sid);
+  deviceCache.delete(session.sid);
+  joinRequestCache.delete(session.sid);
+  activeDeviceIDs.delete(session.sid);
+  try {
+    await postJSON(`/api/session/${encodeURIComponent(session.sid)}/close`);
+  } catch (_) {}
+  sessions = sessions.filter((candidate) => candidate.sid !== session.sid);
+  saveSessions();
+  if (sid === session.sid) {
+    if (sessions.length > 0) {
+      selectSession(sessions[0], true);
+    } else {
+      addSession.click();
+    }
+  } else {
+    renderSessions();
+  }
+  showNotice("Session deleted", "success", "");
+}
+
+function loadSessions() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(sessionsKey) || "[]");
+    if (Array.isArray(parsed)) {
+      return parsed.filter((session) => session && session.sid).map((session, index) => ({
+        sid: String(session.sid),
+        key: String(session.key || ""),
+        name: cleanName(session.name, defaultSessionName(index))
+      }));
+    }
+  } catch (_) {}
+  return [];
+}
+
+function saveSessions() {
+  try {
+    localStorage.setItem(sessionsKey, JSON.stringify(sessions));
+  } catch (_) {}
+}
+
+function upsertSession(session) {
+  const existing = sessions.find((candidate) => candidate.sid === session.sid);
+  if (existing) {
+    existing.key = session.key || existing.key;
+    existing.name = cleanName(session.name, existing.name || nextSessionName());
+  } else {
+    sessions.push({ sid: session.sid, key: session.key || "", name: cleanName(session.name, nextSessionName()) });
+  }
+  saveSessions();
+  renderSessions();
+}
+
+function updateSessionName(sessionSID, name) {
+  if (!name) return;
+  const existing = sessions.find((candidate) => candidate.sid === sessionSID);
+  if (existing) {
+    existing.name = cleanName(name, existing.name);
+  } else {
+    sessions.push({ sid: sessionSID, key: sessionSID === sid ? sessionKey : "", name: cleanName(name, nextSessionName()) });
+  }
+  saveSessions();
+  renderSessions();
+}
+
+function rememberedSID() {
+  try {
+    return localStorage.getItem(storageKey) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function rememberSID(value) {
+  try {
+    if (value) {
+      localStorage.setItem(storageKey, value);
+    } else {
+      localStorage.removeItem(storageKey);
+    }
+  } catch (_) {}
+}
+
+async function pcSession() {
+  const pathSID = sessionMatch ? sessionMatch[1] : "";
+  if (pathSID) {
+    const data = await postJSON(`/api/session/${encodeURIComponent(pathSID)}/resume`);
+    const saved = sessions.find((item) => item.sid === data.sid) || {};
+    const session = { sid: data.sid, key: sessionKeyFromHash() || saved.key || randomSessionKey(), name: saved.name || nextSessionName() };
+    upsertSession(session);
+    return session;
+  }
+  const saved = rememberedSID();
+  const savedSession = sessions.find((session) => session.sid === saved) || sessions[0];
+  if (savedSession) {
+    try {
+      const data = await postJSON(`/api/session/${encodeURIComponent(savedSession.sid)}/resume`);
+      savedSession.sid = data.sid;
+      savedSession.key = savedSession.key || randomSessionKey();
+      upsertSession(savedSession);
+      return savedSession;
+    } catch (_) {
+      sessions = sessions.filter((session) => session.sid !== savedSession.sid);
+      saveSessions();
+      rememberSID("");
+    }
+  }
+  const data = await postJSON("/api/session");
+  const session = { sid: data.sid, key: randomSessionKey(), name: nextSessionName() };
+  upsertSession(session);
+  return session;
+}
+
+function showNotice(message, state, content, sticky) {
+  const notice = document.querySelector("#copyNotif");
+  const icon = document.querySelector("#notifIcon");
+  const statusText = document.querySelector("#notifStatus");
+  const data = document.querySelector("#notifData");
+
+  if (notifDismissTimer) {
+    clearTimeout(notifDismissTimer);
+    notifDismissTimer = null;
+  }
+
+  notice.classList.remove("success", "pending", "peek", "error");
+  notice.classList.add(state, "show");
+  renderNoticeIcon(icon, state);
+  statusText.textContent = message;
+  renderNoticeContent(data, content);
+  if (noticeNeedsQRHidden(state, content)) {
+    hideQRForNotice();
+  } else {
+    restoreNoticeQR();
+  }
+
+  if (!sticky && state !== "pending") {
+    notifDismissTimer = setTimeout(hideNotice, 2500);
+  }
+}
+
+function renderNoticeIcon(container, state) {
+  container.replaceChildren();
+  if (!state) return;
+  if (state === "peek") {
+    container.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+    return;
+  }
+  container.textContent = state === "pending" || state === "error" ? "!" : "✓";
+}
+
+function hideNotice() {
+  if (notifDismissTimer) {
+    clearTimeout(notifDismissTimer);
+    notifDismissTimer = null;
+  }
+  const notice = document.querySelector("#copyNotif");
+  notice.classList.remove("show", "success", "pending", "peek", "error");
+  renderNoticeIcon(document.querySelector("#notifIcon"), "");
+  document.querySelector("#notifStatus").textContent = "";
+  renderNoticeContent(document.querySelector("#notifData"), "");
+  restoreNoticeQR();
+}
+
+function renderNoticeContent(container, content) {
+  container.replaceChildren();
+  if (content && content.type === "image") {
+    const img = document.createElement("img");
+    img.className = "notif-image";
+    img.alt = content.alt || imageSummary(content.image);
+    img.src = imageDataURL(content.image);
+    container.append(img);
+    return;
+  }
+  container.textContent = content || "";
+}
+
+function imageSummary(image) {
+  const data = image && image.data ? image.data : "";
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  const bytes = Math.max(0, Math.floor(data.length * 3 / 4) - padding);
+  const size = bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.ceil(bytes / 1024))} KB`;
+  return `PNG image, ${size}`;
+}
+
+function imageDataURL(image) {
+  const mime = image && image.mime && image.mime.startsWith("image/") ? image.mime : "image/png";
+  return `data:${mime};base64,${image && image.data ? image.data : ""}`;
+}
+
+function showClipboardNotification(text, isPending) {
+  showNotice(isPending ? "Click or focus the page to copy" : "Copied to clipboard", isPending ? "pending" : "success", text);
+}
+
+function showImageClipboardNotification(image, isPending) {
+  showNotice(isPending ? "Click or focus the page to copy image" : "Image copied to clipboard", isPending ? "pending" : "success", {
+    type: "image",
+    image,
+    alt: imageSummary(image)
+  });
+}
+
+function clearPendingCopy() {
+  pendingCopyText = "";
+  pendingCopyImage = null;
+}
+
+async function attemptPendingCopy() {
+  if (pendingCopyImage) {
+    const imageToCopy = pendingCopyImage;
+    try {
+      await writeImageClipboard(imageToCopy);
+      clearPendingCopy();
+      showImageClipboardNotification(imageToCopy, false);
+    } catch (err) {
+      console.error("Image copy failed:", err);
+    }
+    return;
+  }
+  if (pendingCopyText) {
+    const textToCopy = pendingCopyText;
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      clearPendingCopy();
+      showClipboardNotification(textToCopy, false);
+    } catch (err) {
+      console.error("Copy failed:", err);
+    }
+  }
+}
+
+window.addEventListener("focus", attemptPendingCopy);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") attemptPendingCopy();
+});
+document.addEventListener("click", attemptPendingCopy);
+
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+  if (!res.ok) {
+    let message = "Request failed";
+    try {
+      const data = await res.json();
+      message = data.error || message;
+    } catch (_) {}
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+function addMessage(list, direction, text) {
+  list.classList.remove("hidden");
+  const bubble = document.createElement("button");
+  bubble.type = "button";
+  bubble.className = `bubble ${direction}`;
+  bubble.title = "Copy";
+  const body = document.createElement("span");
+  body.textContent = text || "";
+  bubble.append(body);
+  bubble.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(text || "");
+      showNotice("Copied", "success", "");
+    } catch (_) {
+      showNotice("Copy blocked", "error", "");
+    }
+  };
+  list.append(bubble);
+  list.scrollTop = list.scrollHeight;
+}
+
+function websocketURLFor(sessionSID, role) {
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${location.host}/ws/${encodeURIComponent(sessionSID)}/${role}`;
+}
+
+async function blobToBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBlob(data, mime) {
+  const binary = atob(data || "");
+  const chunkSize = 0x8000;
+  const chunks = [];
+  for (let i = 0; i < binary.length; i += chunkSize) {
+    const slice = binary.slice(i, i + chunkSize);
+    const bytes = new Uint8Array(slice.length);
+    for (let j = 0; j < slice.length; j++) bytes[j] = slice.charCodeAt(j);
+    chunks.push(bytes);
+  }
+  return new Blob(chunks, { type: mime });
+}
+
+async function readClipboardContent() {
+  // ponytail: one read prevents iOS from asking Paste twice; use readText only when read() is missing.
+  if (!navigator.clipboard.read) return { type: "text", text: await navigator.clipboard.readText() };
+  const items = await navigator.clipboard.read();
+  let text = "";
+  for (const item of items) {
+    const type = item.types.find((candidate) => candidate === "image/png");
+    if (!type) continue;
+    const blob = await item.getType(type);
+    return { type: "image", image: { mime: type, data: await blobToBase64(blob) } };
+  }
+  for (const item of items) {
+    const type = item.types.find((candidate) => candidate === "text/plain");
+    if (!type) continue;
+    const blob = await item.getType(type);
+    text = await blob.text();
+    break;
+  }
+  return { type: "text", text };
+}
+
+async function readClipboardPreview() {
+  return readClipboardContent();
+}
+
+async function writeImageClipboard(image) {
+  if (!window.ClipboardItem || !navigator.clipboard.write) throw new Error("image clipboard is not supported");
+  const blob = base64ToBlob(image.data, image.mime);
+  await navigator.clipboard.write([new ClipboardItem({ [image.mime]: blob })]);
+}
+
+function sessionKeyFromHash() {
+  try {
+    return new URLSearchParams(location.hash.slice(1)).get("k") || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function randomSessionKey() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return bytesToBase64URL(bytes);
+}
+
+function bytesToBase64URL(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64URLToBytes(value) {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function cryptoKey(rawKey) {
+  if (!crypto.subtle || !rawKey) throw new Error("secure link key unavailable");
+  return crypto.subtle.importKey("raw", base64URLToBytes(rawKey), "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+async function encryptPayload(payload) {
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
+  const key = await cryptoKey(sessionKey);
+  const data = new TextEncoder().encode(JSON.stringify(payload));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data));
+  return { mime: encryptedClipboardMIME, data: JSON.stringify({ v: 1, iv: bytesToBase64URL(iv), ct: bytesToBase64URL(ct) }) };
+}
+
+async function decryptPayload(data, rawKey) {
+  const box = JSON.parse(data || "{}");
+  const key = await cryptoKey(rawKey);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64URLToBytes(box.iv || "") }, key, base64URLToBytes(box.ct || ""));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+async function receiveText(status, messages, text) {
+  addMessage(messages, "received", text);
+  try {
+    if (!document.hasFocus()) throw new Error("tab is not active");
+    await navigator.clipboard.writeText(text);
+    status.textContent = "Received and copied.";
+    clearPendingCopy();
+    showClipboardNotification(text, false);
+  } catch (_) {
+    status.textContent = "Received.";
+    pendingCopyImage = null;
+    pendingCopyText = text;
+    showClipboardNotification(text, true);
+  }
+}
+
+async function receiveImage(status, messages, image) {
+  addMessage(messages, "received", imageSummary(image));
+  try {
+    if (!document.hasFocus()) throw new Error("tab is not active");
+    await writeImageClipboard(image);
+    status.textContent = "Received and copied.";
+    clearPendingCopy();
+    showImageClipboardNotification(image, false);
+  } catch (_) {
+    status.textContent = "Received.";
+    pendingCopyText = "";
+    pendingCopyImage = image;
+    showImageClipboardNotification(image, true);
+  }
+}
+
+async function receiveEvent(status, messages, session, event) {
+  if (event.type === "session") {
+    if (event.name) {
+      session.name = event.name;
+      updateSessionName(event.sid || session.sid, event.name);
+    }
+    return;
+  }
+  if (event.type === "me") {
+    activeDeviceIDs.set(session.sid, event.deviceId || "");
+    if (session.sid === sid) renderDevices(deviceCache.get(sid) || []);
+    renderSessions();
+    return;
+  }
+  if (event.type === "devices") {
+    deviceCache.set(session.sid, event.devices || []);
+    joinRequestCache.set(session.sid, event.joinRequests || []);
+    const active = (event.devices || []).find((device) => device.active);
+    if (active) activeDeviceIDs.set(session.sid, active.id);
+    if (session.sid === sid) {
+      renderDevices(event.devices || [], event.joinRequests || []);
+      status.textContent = (event.devices || []).some((device) => device.connected) ? "Ready." : "Scan QR code to connect.";
+    }
+    renderSessions();
+    return;
+  }
+  if (event.type === "clipboard.encrypted") {
+    try {
+      const payload = await decryptPayload(event.data, session.key);
+      if (payload.type === "image") {
+        await receiveImage(status, messages, { mime: payload.mime || "image/png", data: payload.data || "" });
+      } else {
+        await receiveText(status, messages, payload.text || "");
+      }
+    } catch (_) {
+      showNotice("Could not decrypt clipboard", "error", session.sid);
+    }
+    return;
+  }
+  if (event.type === "clipboard.image") {
+    await receiveImage(status, messages, { mime: event.mime || "image/png", data: event.data || "" });
+    return;
+  }
+  if (event.type === "clipboard.text") await receiveText(status, messages, event.text || "");
+}
+
+function clearPeekHideTimer() {
+  if (!peekHideTimer) return;
+  clearTimeout(peekHideTimer);
+  peekHideTimer = null;
+}
+
+function scheduleHideClipboardPeek() {
+  clearPeekHideTimer();
+  peekHideTimer = setTimeout(hideClipboardPeek, peekAutoHideMs);
+}
+
+async function showClipboardPeek(autoHide) {
+  clearPeekHideTimer();
+  peekActive = true;
+  const token = ++peekToken;
+  showNotice("", "peek", "", true);
+  try {
+    const preview = await readClipboardPreview();
+    if (!peekActive || token !== peekToken) return;
+    if (preview.type === "image") {
+      showNotice("", "peek", {
+        type: "image",
+        image: preview.image,
+        alt: imageSummary(preview.image)
+      }, true);
+      if (autoHide) scheduleHideClipboardPeek();
+      return;
+    }
+    showNotice("", "peek", preview.text, true);
+    if (autoHide) scheduleHideClipboardPeek();
+  } catch (_) {
+    if (peekActive && token === peekToken) {
+      showNotice("Clipboard access blocked", "error", "", true);
+      if (autoHide) scheduleHideClipboardPeek();
+    }
+  }
+}
+
+function hideClipboardPeek() {
+  if (!peekActive) return;
+  clearPeekHideTimer();
+  peekActive = false;
+  peekToken++;
+  hideNotice();
+}
+
+function isTimedPeek(event) {
+  // ponytail: coarse pointer is enough for phones; split per platform only if hybrid devices need different peek behavior.
+  return event.pointerType !== "mouse" || window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+}
+
+function setupPeekButton(button) {
+  button.onpointerdown = (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    showClipboardPeek(isTimedPeek(event));
+  };
+  button.onpointerup = (event) => {
+    if (!isTimedPeek(event)) hideClipboardPeek();
+  };
+  button.onpointercancel = (event) => {
+    if (!isTimedPeek(event)) hideClipboardPeek();
+  };
+  button.oncontextmenu = (event) => {
+    if (window.matchMedia("(hover: none) and (pointer: coarse)").matches) event.preventDefault();
+  };
+  button.onkeydown = (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    if (!peekActive) showClipboardPeek();
+  };
+  button.onkeyup = (event) => {
+    if (event.key === "Enter" || event.key === " ") hideClipboardPeek();
+  };
+  button.onblur = hideClipboardPeek;
+}
+
+document.addEventListener("pointerup", (event) => {
+  if (!isTimedPeek(event)) hideClipboardPeek();
+});
+document.addEventListener("pointercancel", (event) => {
+  if (!isTimedPeek(event)) hideClipboardPeek();
+});
+
+async function sendClipboard(status, messages) {
+  let content;
+  try {
+    content = await readClipboardContent();
+  } catch (_) {
+    status.textContent = "Clipboard access blocked.";
+    showNotice("Clipboard access blocked", "error", "");
+    return;
+  }
+  try {
+    if (content.type === "image") {
+      await postJSON(`/api/session/${encodeURIComponent(sid)}/clipboard`, await encryptPayload({ type: "image", mime: content.image.mime, data: content.image.data }));
+      status.textContent = "Sent.";
+      addMessage(messages, "sent", imageSummary(content.image));
+      showNotice("Image sent", "success", imageSummary(content.image));
+      return;
+    }
+    const text = content.text || "";
+    await postJSON(`/api/session/${encodeURIComponent(sid)}/clipboard`, await encryptPayload({ type: "text", text }));
+    status.textContent = "Sent.";
+    addMessage(messages, "sent", text);
+    showNotice("Sent", "success", "");
+  } catch (err) {
+    status.textContent = err.message;
+    showNotice(err.message, "error", "");
+  }
+}
+
+function connectPCSession(session) {
+  if (pcLinks.has(session.sid)) return;
+  const state = { ws: null, closed: false };
+  pcLinks.set(session.sid, state);
+  const status = document.querySelector("#pcStatus");
+  const messages = document.querySelector("#pcMessages");
+  const connect = () => {
+    if (state.closed) return;
+    const ws = new WebSocket(websocketURLFor(session.sid, "pc"));
+    state.ws = ws;
+    ws.onopen = () => {
+      if (session.sid === sid) status.textContent = "Scan QR code to connect.";
+    };
+    ws.onclose = () => {
+      if (!state.closed) setTimeout(connect, 1000);
+    };
+    ws.onerror = () => {
+      if (session.sid === sid) status.textContent = "Connection failed.";
+    };
+    ws.onmessage = (message) => receiveEvent(status, messages, session, JSON.parse(message.data));
+  };
+  connect();
+}
+
+async function startPC() {
+  pageRole = "pc";
+  pc.classList.remove("hidden");
+  mobile.classList.add("hidden");
+  document.body.classList.add("pc-mode");
+  document.body.classList.remove("mobile-mode", "session-pane-open", "device-pane-open");
+  appLayout.classList.add("pc-mode");
+  appLayout.classList.remove("mobile-mode");
+  sessionPane.classList.remove("hidden");
+  devicePane.classList.remove("hidden");
+  document.querySelector("#mobileActions").classList.add("hidden");
+  syncPaneLayout();
+
+  const session = await pcSession();
+  selectSession(session, true);
+  for (const item of sessions) connectPCSession(item);
+  document.querySelector("#pcStatus").textContent = "Scan QR code to connect.";
+  document.querySelector("#sendPC").onclick = () => sendClipboard(document.querySelector("#pcStatus"), document.querySelector("#pcMessages"));
+  setupPeekButton(document.querySelector("#peekPC"));
+}
+
+function deviceLabel() {
+  return "";
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function joinMobile() {
+  if (joined) return;
+  const status = document.querySelector("#mobileStatus");
+  let noticeShown = false;
+  while (!joined) {
+    const result = await postJSON(`/api/session/${encodeURIComponent(sid)}/join`, { device: deviceLabel() });
+    if (result.status === "pending") {
+      status.textContent = "Waiting for approval.";
+      if (!noticeShown) {
+        showNotice("Waiting for approval", "pending", "Keep this page open");
+        noticeShown = true;
+      }
+      await wait(1500);
+      continue;
+    }
+    joined = true;
+  }
+  status.textContent = "Connected.";
+  if (noticeShown) showNotice("Connected", "success", "");
+}
+
+async function startMobile() {
+  pageRole = "mobile";
+  sessionKey = sessionKeyFromHash();
+  pc.classList.add("hidden");
+  mobile.classList.remove("hidden");
+  document.body.classList.remove("pc-mode");
+  document.body.classList.add("mobile-mode");
+  setPaneOpen("session", false);
+  setPaneOpen("device", false);
+  appLayout.classList.remove("pc-mode");
+  appLayout.classList.add("mobile-mode");
+  sessionPane.classList.remove("hidden");
+  devicePane.classList.remove("hidden");
+  sessionPaneToggle.classList.remove("hidden");
+  devicePaneToggle.classList.remove("hidden");
+  document.querySelector("#pcActions").classList.add("hidden");
+  document.querySelector("#mobileActions").classList.remove("hidden");
+  syncPaneLayout();
+  const status = document.querySelector("#mobileStatus");
+  const messages = document.querySelector("#mobileMessages");
+  if (!sessionKey) {
+    status.textContent = "Secure link key missing.";
+    showNotice("Secure link key missing", "error", "");
+    return;
+  }
+  const saved = sessions.find((item) => item.sid === sid) || {};
+  const session = { sid, key: sessionKey, name: saved.name || nextSessionName() };
+  selectSession(session, true);
+  setJoinLink(sid);
+  joinMobile()
+    .then(() => {
+      function connect() {
+        const ws = new WebSocket(websocketURLFor(sid, "mobile"));
+        ws.onopen = () => status.textContent = "Connected.";
+        ws.onclose = () => {
+          status.textContent = "Reconnecting...";
+          setTimeout(connect, 1000);
+        };
+        ws.onerror = () => status.textContent = "Connection failed.";
+        ws.onmessage = (message) => receiveEvent(status, messages, session, JSON.parse(message.data));
+      }
+      connect();
+    })
+    .catch((err) => {
+      status.textContent = err.message;
+      showNotice(err.message, "error", "");
+    });
+
+  document.querySelector("#sendClipboard").onclick = () => sendClipboard(status, messages);
+  setupPeekButton(document.querySelector("#peekClipboard"));
+}
+
+if (sid) {
+  startPC().catch(() => startMobile());
+} else {
+  startPC().catch((err) => {
+    pageRole = "pc";
+    pc.classList.remove("hidden");
+    document.body.classList.add("pc-mode");
+    document.body.classList.remove("mobile-mode", "session-pane-open", "device-pane-open");
+    appLayout.classList.add("pc-mode");
+    appLayout.classList.remove("mobile-mode");
+    sessionPane.classList.remove("hidden");
+    devicePane.classList.remove("hidden");
+    document.querySelector("#mobileActions").classList.add("hidden");
+    syncPaneLayout();
+    document.querySelector("#pcStatus").textContent = err.message;
+    showNotice(err.message, "error", "");
+  });
+}

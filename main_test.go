@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +16,17 @@ import (
 
 	"github.com/coder/websocket"
 )
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "clipbridge-test-*")
+	if err != nil {
+		os.Exit(m.Run())
+	}
+	os.Setenv("ANALYTICS_PATH", filepath.Join(dir, "analytics.jsonl"))
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 func TestSessionIDUsesURLSafeToken(t *testing.T) {
 	h := newHub()
@@ -606,13 +619,75 @@ func TestImageClipboardPayloadRelayAndValidation(t *testing.T) {
 	}
 }
 
+func TestAnalyticsCountsClipboardShareWithoutContent(t *testing.T) {
+	a := newApp()
+	a.analytics.path = filepath.Join(t.TempDir(), "analytics.jsonl")
+	fixedNow := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	a.hub.now = func() time.Time { return fixedNow }
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("index status = %d", w.Code)
+	}
+	analyticsCookie := findCookie(t, w.Result().Cookies(), analyticsCookieName)
+
+	sid, pcToken, err := a.hub.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.hub.connectPC(sid, pcToken); err != nil {
+		t.Fatal(err)
+	}
+	mobileToken, setCookie, err := a.hub.joinMobile(sid, "", "Device2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !setCookie {
+		t.Fatal("mobile join should issue a token")
+	}
+	if _, err := a.hub.connectMobile(sid, mobileToken); err != nil {
+		t.Fatal(err)
+	}
+
+	secret := "secret clipboard text"
+	req = httptest.NewRequest(http.MethodPost, "/api/session/"+sid+"/clipboard", strings.NewReader(`{"text":`+strconv.Quote(secret)+`}`))
+	req.AddCookie(analyticsCookie)
+	req.AddCookie(&http.Cookie{Name: mobileCookieName(sid), Value: mobileToken})
+	w = httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("clipboard status = %d", w.Code)
+	}
+
+	summary, err := a.analyticsSummary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.TotalVisits != 1 || summary.ClipboardShares != 1 || summary.UniqueVisitors != 1 || summary.ActiveToday != 1 {
+		t.Fatalf("summary = %+v, want one visit/share/visitor active today", summary)
+	}
+	b, err := os.ReadFile(a.analytics.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logged := string(b)
+	if !strings.Contains(logged, "clipboard_shared") {
+		t.Fatal("analytics log missing clipboard share event")
+	}
+	if strings.Contains(logged, secret) || strings.Contains(logged, "clipboard.text") {
+		t.Fatalf("analytics log stored clipboard content or relay event: %s", logged)
+	}
+}
+
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
 	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "Add link", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout", "copyConnectURL", "connectURL", "copy-link", "?fragment=", "qrQuery", "session-select", "session-delete", "reveal-delete", "swipeStartX", "readClipboardImage"} {
 		if strings.Contains(indexHTML, old) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<script nonce="{{NONCE}}" src="/qrcode.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", "Blake Becker |", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardContent", "readClipboardPreview", "text/plain", "showClipboardPeek", "setupPeekButton", "peekAutoHideMs = 2500", "noticeHiddenQR", "dataset.noticeHidden", "setTimeout(hideNotice, 2500)", "(hover: none) and (pointer: coarse)", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")", "position: sticky", "onMiddleClick", "onauxclick", "deleteDevice(device)", "width: 100vw", "border-radius: 8px 8px 0 0"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<script nonce="{{NONCE}}" src="/qrcode.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", "Blake Becker |", "Analytics", "Privacy", "Terms", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardContent", "readClipboardPreview", "text/plain", "showClipboardPeek", "setupPeekButton", "peekAutoHideMs = 2500", "noticeHiddenQR", "dataset.noticeHidden", "setTimeout(hideNotice, 2500)", "(hover: none) and (pointer: coarse)", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")", "position: sticky", "onMiddleClick", "onauxclick", "deleteDevice(device)", "width: 100vw", "border-radius: 8px 8px 0 0"} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}

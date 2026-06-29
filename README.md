@@ -20,17 +20,20 @@ Open `http://localhost:8080`, then scan the QR code or copy the join link on ano
 - The original browser can add, select, and close multiple join links.
 - The original browser remembers its last session locally and can resume while the server still has it.
 - Clipboard images are relayed as PNG payloads with a 5 MiB decoded size limit.
+- Anonymous aggregate analytics for visits, sessions, device joins, and successful clipboard shares.
 
 ## Deploy
 
 - Railway can run this as a single Go service.
 - Set `PUBLIC_BASE_URL=https://clipbridge.app` if the app is behind a proxy or custom domain.
 - Keep one instance for now. Sessions, device names, and join-link aliases are intentionally in memory and disappear when the process restarts or the session expires.
+- Analytics are appended to `analytics.jsonl` by default. Set `ANALYTICS_PATH=/path/to/analytics.jsonl` to choose a persistent volume path, or `ANALYTICS_PATH=off` to disable analytics.
 
 ## Security Notes
 
-- No accounts, database, analytics, or third-party frontend assets.
+- No accounts, database, or third-party frontend assets.
 - Clipboard text and images are encrypted in the browser with AES-GCM before relay. The server relays ciphertext in memory and does not log or persist clipboard contents.
+- Analytics use a first-party anonymous cookie. Logs store hashed anonymous browser IDs, event names, timestamps, and hashed session IDs; they do not store clipboard contents, device names, IP addresses, or user agents.
 - Join links keep the encryption key in the URL fragment, which browsers do not send in normal HTTP requests. QR codes are rendered in the browser, so the key is not sent in a QR generation request.
 - A copied link or QR code only starts a pending join; a connected device still has to allow the new device before it receives a session cookie.
 - Pairing auth tokens are HttpOnly cookies.

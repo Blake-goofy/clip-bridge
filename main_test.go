@@ -681,7 +681,7 @@ func TestAnalyticsTracksOnlyJoinsAndClipboardShares(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			t.Fatalf("invalid analytics json line %q: %v", line, err)
 		}
-		if e.Date != "2026-06-29" || !knownAnalyticsEvent(e.Event) {
+		if e.Date != "2026-06-29" || (e.Event != "device_joined" && e.Event != "clipboard_shared") {
 			t.Fatalf("unexpected analytics event: %+v", e)
 		}
 	}

@@ -93,7 +93,7 @@ func (a *app) recordAnalytics(event string) {
 }
 
 func (a *analytics) record(event string) error {
-	if !knownAnalyticsEvent(event) {
+	if event != "device_joined" && event != "clipboard_shared" {
 		return errors.New("unknown analytics event")
 	}
 	e := analyticsLogEvent{
@@ -109,10 +109,6 @@ func (a *analytics) record(event string) error {
 	}
 	defer f.Close()
 	return json.NewEncoder(f).Encode(e)
-}
-
-func knownAnalyticsEvent(event string) bool {
-	return event == "device_joined" || event == "clipboard_shared"
 }
 
 func (a *app) analyticsSummary(rangeValue string) (analyticsSummary, error) {
@@ -139,7 +135,7 @@ func (a *analytics) summary(rangeValue string) (analyticsSummary, error) {
 	}
 	f, err := os.Open(a.path)
 	if errors.Is(err, os.ErrNotExist) {
-		s.ChartDays = analyticsDaysInRange(nil, dateOnly(now), rangeKey, rangeDays)
+		s.ChartDays = analyticsDaysInRange(nil, now.UTC().Truncate(24*time.Hour), rangeKey, rangeDays)
 		s.Chart = buildAnalyticsChart(s.ChartDays)
 		return s, nil
 	}
@@ -159,7 +155,7 @@ func (a *analytics) summary(rangeValue string) (analyticsSummary, error) {
 		if event == "" {
 			event = e.Old
 		}
-		if !knownAnalyticsEvent(event) {
+		if event != "device_joined" && event != "clipboard_shared" {
 			continue
 		}
 		day, ok := analyticsEventDay(e)
@@ -182,7 +178,7 @@ func (a *analytics) summary(rangeValue string) (analyticsSummary, error) {
 		return s, err
 	}
 
-	end := dateOnly(now)
+	end := now.UTC().Truncate(24 * time.Hour)
 	s.ChartDays = analyticsDaysInRange(days, end, rangeKey, rangeDays)
 	for _, d := range s.ChartDays {
 		s.ClipboardShares += d.ClipboardShares
@@ -298,8 +294,8 @@ func buildAnalyticsChart(days []analyticsDay) analyticsChart {
 		}
 		sharesY := bottom - (float64(d.ClipboardShares) / float64(maxY) * plotH)
 		joinsY := bottom - (float64(d.DevicesJoined) / float64(maxY) * plotH)
-		share := analyticsChartPoint{X: chartNumber(x), Y: chartNumber(sharesY)}
-		join := analyticsChartPoint{X: chartNumber(x), Y: chartNumber(joinsY)}
+		share := analyticsChartPoint{X: fmt.Sprintf("%.1f", x), Y: fmt.Sprintf("%.1f", sharesY)}
+		join := analyticsChartPoint{X: fmt.Sprintf("%.1f", x), Y: fmt.Sprintf("%.1f", joinsY)}
 		chart.SharesPoints = append(chart.SharesPoints, share)
 		chart.JoinsPoints = append(chart.JoinsPoints, join)
 		chart.SharesLine += share.X + "," + share.Y + " "
@@ -327,13 +323,4 @@ func chartLabelIndexes(n int) []int {
 		return []int{0, n - 1}
 	}
 	return []int{0, mid, n - 1}
-}
-
-func chartNumber(v float64) string {
-	return fmt.Sprintf("%.1f", v)
-}
-
-func dateOnly(t time.Time) time.Time {
-	y, m, d := t.Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }

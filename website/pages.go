@@ -511,7 +511,7 @@ var analyticsPageTemplate = template.Must(template.New("analytics").Parse(`<!doc
 `))
 
 func (a *app) handleIndex(w http.ResponseWriter, r *http.Request) {
-	csp := "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self' data:; connect-src 'self' ws: wss:; style-src 'self'; script-src 'self'"
+	csp := "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self' data:; connect-src 'self' ws: wss: http://127.0.0.1:* http://localhost:*; style-src 'self'; script-src 'self'"
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(indexHTML))

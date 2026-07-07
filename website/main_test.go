@@ -858,7 +858,7 @@ func TestIndexCSPAllowsRenderedImagePreviews(t *testing.T) {
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)
 	got := w.Header().Get("Content-Security-Policy")
-	for _, want := range []string{"img-src 'self' data:", "style-src 'self'", "script-src 'self'"} {
+	for _, want := range []string{"img-src 'self' data:", "style-src 'self'", "script-src 'self'", "http://127.0.0.1:*", "http://localhost:*"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("CSP = %q, want %q", got, want)
 		}

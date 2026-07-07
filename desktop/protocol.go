@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -66,6 +65,19 @@ type deviceView struct {
 type joinRequestView struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+type apiError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *apiError) Error() string {
+	if e.Body == "" {
+		return "server returned " + e.Status
+	}
+	return "server returned " + e.Status + ": " + e.Body
 }
 
 func newDesktopApp(ctx context.Context, cancel context.CancelFunc) (*desktopApp, error) {
@@ -431,6 +443,7 @@ func (a *desktopApp) renameSession(ctx context.Context, sid, name string) error 
 	if sid == "" || name == "" {
 		return errors.New("missing session name")
 	}
+	a.restoreKnownSessionCookie(sid)
 	if err := a.postJSON(ctx, "/api/session/"+url.PathEscape(sid)+"/name", map[string]string{"name": name}, nil); err != nil {
 		return err
 	}
@@ -458,6 +471,7 @@ func (a *desktopApp) renameDevice(ctx context.Context, sid, deviceID, name strin
 	if sid == "" || deviceID == "" || name == "" {
 		return errors.New("missing device name")
 	}
+	a.restoreKnownSessionCookie(sid)
 	path := "/api/session/" + url.PathEscape(sid) + "/devices/" + url.PathEscape(deviceID) + "/name"
 	return a.postJSON(ctx, path, map[string]string{"name": name}, nil)
 }
@@ -468,6 +482,7 @@ func (a *desktopApp) disconnectDevice(ctx context.Context, sid, deviceID string)
 	if sid == "" || deviceID == "" {
 		return errors.New("missing device")
 	}
+	a.restoreKnownSessionCookie(sid)
 	path := "/api/session/" + url.PathEscape(sid) + "/devices/" + url.PathEscape(deviceID) + "/disconnect"
 	return a.postJSON(ctx, path, map[string]bool{}, nil)
 }
@@ -477,8 +492,12 @@ func (a *desktopApp) closeSession(ctx context.Context, sid string) error {
 	if sid == "" {
 		return errors.New("missing session")
 	}
+	a.restoreKnownSessionCookie(sid)
 	if err := a.postJSON(ctx, "/api/session/"+url.PathEscape(sid)+"/close", map[string]bool{}, nil); err != nil {
-		return err
+		var apiErr *apiError
+		if !errors.As(err, &apiErr) || (apiErr.StatusCode != http.StatusNotFound && apiErr.StatusCode != http.StatusUnauthorized) {
+			return err
+		}
 	}
 	var next savedSession
 	a.mu.Lock()
@@ -513,6 +532,21 @@ func (a *desktopApp) closeSession(ctx context.Context, sid string) error {
 	a.activateSession(s, "Ready.")
 	a.restartRelay()
 	return nil
+}
+
+func (a *desktopApp) restoreKnownSessionCookie(sid string) {
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
+	for _, s := range cfg.Sessions {
+		if s.SID == sid {
+			restorePCCookie(a.client.Jar, cfg.BaseURL, s)
+			return
+		}
+	}
+	if cfg.Session.SID == sid {
+		restorePCCookie(a.client.Jar, cfg.BaseURL, cfg.Session)
+	}
 }
 
 func removeSavedSession(sessions []savedSession, sid string) []savedSession {
@@ -554,7 +588,7 @@ func (a *desktopApp) postJSON(ctx context.Context, path string, in, out any) err
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("server returned %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return &apiError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(b))}
 	}
 	if out == nil {
 		io.Copy(io.Discard, resp.Body)

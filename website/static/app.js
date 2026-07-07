@@ -376,7 +376,7 @@ async function renameActiveDevice() {
   const name = deviceNameInput.value;
   try {
     const isThisDevice = activeDevice.id === activeDeviceIDs.get(sid);
-    let targets = isThisDevice
+    let targets = localBridge ? [{ sid, deviceID: activeDevice.id }] : isThisDevice
       ? sessions
           .map((session) => ({ sid: session.sid, deviceID: activeDeviceIDs.get(session.sid) }))
           .filter((target) => target.deviceID)
@@ -566,7 +566,7 @@ function drawQRCode(canvas, text) {
 
 addSession.onclick = async () => {
   try {
-    const data = localBridge ? await localFetch("/session") : await postJSON("/api/session");
+    const data = localBridge ? await localFetch("/session", {}) : await postJSON("/api/session");
     const session = { sid: data.sid, key: data.key || randomSessionKey(), name: data.name || nextSessionName() };
     upsertSession(session);
     selectSession(session, true);

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -76,7 +77,7 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 		}
 		s, err := app.createSession(r.Context())
 		if err != nil {
-			writeLocalError(w, http.StatusBadGateway, err.Error())
+			writeLocalUpstreamError(w, err)
 			return
 		}
 		app.activateSession(s, "Ready.")
@@ -106,7 +107,7 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 		}
 		if err := app.sendClipboard(r.Context()); err != nil {
 			log.Printf("send clipboard: %v", err)
-			writeLocalError(w, http.StatusBadGateway, err.Error())
+			writeLocalUpstreamError(w, err)
 			return
 		}
 		writeLocalJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
@@ -123,7 +124,7 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 		}
 		if err := app.approveJoin(r.Context(), req.ID); err != nil {
 			log.Printf("allow join: %v", err)
-			writeLocalError(w, http.StatusBadGateway, err.Error())
+			writeLocalUpstreamError(w, err)
 			return
 		}
 		writeLocalJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -138,7 +139,7 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 			return
 		}
 		if err := app.renameSession(r.Context(), req.SID, req.Name); err != nil {
-			writeLocalError(w, http.StatusBadGateway, err.Error())
+			writeLocalUpstreamError(w, err)
 			return
 		}
 		writeLocalJSON(w, http.StatusOK, app.snapshot())
@@ -153,7 +154,7 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 			return
 		}
 		if err := app.closeSession(r.Context(), req.SID); err != nil {
-			writeLocalError(w, http.StatusBadGateway, err.Error())
+			writeLocalUpstreamError(w, err)
 			return
 		}
 		writeLocalJSON(w, http.StatusOK, app.snapshot())
@@ -168,7 +169,7 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 			return
 		}
 		if err := app.renameDevice(r.Context(), req.SID, req.DeviceID, req.Name); err != nil {
-			writeLocalError(w, http.StatusBadGateway, err.Error())
+			writeLocalUpstreamError(w, err)
 			return
 		}
 		writeLocalJSON(w, http.StatusOK, app.snapshot())
@@ -183,7 +184,7 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 			return
 		}
 		if err := app.disconnectDevice(r.Context(), req.SID, req.DeviceID); err != nil {
-			writeLocalError(w, http.StatusBadGateway, err.Error())
+			writeLocalUpstreamError(w, err)
 			return
 		}
 		writeLocalJSON(w, http.StatusOK, app.snapshot())
@@ -261,6 +262,15 @@ func decodeLocalJSON(w http.ResponseWriter, r *http.Request, out any) error {
 
 func writeLocalError(w http.ResponseWriter, status int, message string) {
 	writeLocalJSON(w, status, map[string]string{"error": message})
+}
+
+func writeLocalUpstreamError(w http.ResponseWriter, err error) {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		writeLocalError(w, apiErr.StatusCode, apiErr.Error())
+		return
+	}
+	writeLocalError(w, http.StatusBadGateway, err.Error())
 }
 
 func localBridgeToken() (string, error) {

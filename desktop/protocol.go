@@ -1,0 +1,323 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+type desktopApp struct {
+	mu         sync.Mutex
+	cfg        config
+	configPath string
+	client     *http.Client
+	session    savedSession
+	joinLink   string
+	status     string
+	connected  bool
+	devices    int
+	lastEvent  string
+	cancel     context.CancelFunc
+}
+
+type apiSession struct {
+	SID     string `json:"sid"`
+	LinkURL string `json:"linkURL"`
+}
+
+type relayEvent struct {
+	Type         string            `json:"type"`
+	SID          string            `json:"sid,omitempty"`
+	Devices      []deviceView      `json:"devices,omitempty"`
+	JoinRequests []joinRequestView `json:"joinRequests,omitempty"`
+	Text         string            `json:"text,omitempty"`
+	MIME         string            `json:"mime,omitempty"`
+	Data         string            `json:"data,omitempty"`
+}
+
+type deviceView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Connected bool   `json:"connected"`
+	Active    bool   `json:"active"`
+}
+
+type joinRequestView struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func newDesktopApp(ctx context.Context, cancel context.CancelFunc) (*desktopApp, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
+	restorePCCookie(jar, cfg.BaseURL, cfg.Session)
+	app := &desktopApp{
+		cfg:        cfg,
+		configPath: path,
+		client:     &http.Client{Jar: jar, Timeout: 20 * time.Second},
+		status:     "Starting...",
+		cancel:     cancel,
+	}
+	if err := app.ensureSession(ctx); err != nil {
+		return nil, err
+	}
+	return app, nil
+}
+
+func (a *desktopApp) ensureSession(ctx context.Context) error {
+	if a.cfg.Session.SID != "" && a.cfg.Session.Key != "" {
+		if s, err := a.resumeSession(ctx, a.cfg.Session); err == nil {
+			a.setSession(s, "Ready.")
+			return nil
+		}
+	}
+	s, err := a.createSession(ctx)
+	if err != nil {
+		return err
+	}
+	a.setSession(s, "Ready.")
+	return nil
+}
+
+func (a *desktopApp) createSession(ctx context.Context) (savedSession, error) {
+	var created apiSession
+	if err := a.postJSON(ctx, "/api/session", nil, &created); err != nil {
+		return savedSession{}, err
+	}
+	key, err := randomSessionKey()
+	if err != nil {
+		return savedSession{}, err
+	}
+	cookie, secret := pcCookieFromJar(a.client.Jar, a.cfg.BaseURL, created.SID)
+	if cookie == "" || secret == "" {
+		return savedSession{}, errors.New("server did not return desktop session cookie")
+	}
+	return savedSession{SID: created.SID, Key: key, PCCookie: cookie, PCSecret: secret, DisplayName: "Windows PC"}, nil
+}
+
+func (a *desktopApp) resumeSession(ctx context.Context, s savedSession) (savedSession, error) {
+	var resumed apiSession
+	if err := a.postJSON(ctx, "/api/session/"+url.PathEscape(s.SID)+"/resume", map[string]string{}, &resumed); err != nil {
+		return savedSession{}, err
+	}
+	if resumed.SID != "" {
+		s.SID = resumed.SID
+	}
+	cookie, secret := pcCookieFromJar(a.client.Jar, a.cfg.BaseURL, s.SID)
+	if cookie != "" && secret != "" {
+		s.PCCookie = cookie
+		s.PCSecret = secret
+	}
+	return s, nil
+}
+
+func (a *desktopApp) setSession(s savedSession, status string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.session = s
+	a.cfg.Session = s
+	a.joinLink = joinLink(a.cfg.BaseURL, s.SID, s.Key)
+	a.status = status
+	_ = saveConfig(a.configPath, a.cfg)
+}
+
+func joinLink(base, sid, key string) string {
+	return strings.TrimRight(base, "/") + "/s/" + url.PathEscape(sid) + "#k=" + url.QueryEscape(key)
+}
+
+func (a *desktopApp) connectLoop(ctx context.Context) {
+	for {
+		if err := a.connectOnce(ctx); err != nil && ctx.Err() == nil {
+			a.setStatus("Reconnecting...", false)
+			time.Sleep(time.Second)
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func (a *desktopApp) connectOnce(ctx context.Context) error {
+	s := a.currentSession()
+	wsURL := strings.TrimRight(a.cfg.BaseURL, "/") + "/ws/" + url.PathEscape(s.SID) + "/pc"
+	c, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: a.client})
+	if err != nil {
+		return err
+	}
+	defer c.Close(websocket.StatusNormalClosure, "")
+	a.setStatus("Connected.", true)
+	for {
+		_, b, err := c.Read(ctx)
+		if err != nil {
+			return err
+		}
+		var ev relayEvent
+		if err := json.Unmarshal(b, &ev); err != nil {
+			a.notice("Received invalid event")
+			continue
+		}
+		a.handleEvent(ctx, ev)
+	}
+}
+
+func (a *desktopApp) handleEvent(ctx context.Context, ev relayEvent) {
+	switch ev.Type {
+	case "devices":
+		connected := 0
+		for _, d := range ev.Devices {
+			if d.Connected {
+				connected++
+			}
+		}
+		a.mu.Lock()
+		a.devices = connected
+		a.mu.Unlock()
+		for _, req := range ev.JoinRequests {
+			// ponytail: v1 trusts scans while the desktop app is open; add a manual approval prompt if shared PCs need stricter pairing.
+			_ = a.approveJoin(ctx, req.ID)
+		}
+	case "clipboard.encrypted":
+		payload, err := decryptPayload(a.currentSession().Key, ev.Data)
+		if err != nil {
+			a.notice("Could not decrypt clipboard")
+			return
+		}
+		a.receivePayload(payload)
+	case "clipboard.text":
+		a.receivePayload(clipboardPayload{Type: "text", Text: ev.Text})
+	case "clipboard.image":
+		a.receivePayload(clipboardPayload{Type: "image", MIME: ev.MIME, Data: ev.Data})
+	}
+}
+
+func (a *desktopApp) receivePayload(payload clipboardPayload) {
+	switch payload.Type {
+	case "image":
+		if err := writeClipboardImagePNGFunc(payload.Data); err != nil {
+			a.notice("Image copy failed")
+			return
+		}
+		a.notice("Image copied to clipboard")
+	case "text":
+		if err := writeClipboardTextFunc(payload.Text); err != nil {
+			a.notice("Text copy failed")
+			return
+		}
+		a.notice("Text copied to clipboard")
+	default:
+		a.notice("Unsupported clipboard payload")
+	}
+}
+
+func (a *desktopApp) sendClipboard(ctx context.Context) error {
+	payload, err := readClipboardPayloadFunc()
+	if err != nil {
+		a.notice("Clipboard read failed")
+		return err
+	}
+	box, err := encryptPayload(a.currentSession().Key, payload)
+	if err != nil {
+		return err
+	}
+	body := map[string]string{"mime": encryptedClipboardMIME, "data": box}
+	if err := a.postJSON(ctx, "/api/session/"+url.PathEscape(a.currentSession().SID)+"/clipboard", body, nil); err != nil {
+		a.notice("Send failed")
+		return err
+	}
+	if payload.Type == "image" {
+		a.notice("Image sent")
+	} else {
+		a.notice("Text sent")
+	}
+	return nil
+}
+
+func (a *desktopApp) approveJoin(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	path := "/api/session/" + url.PathEscape(a.currentSession().SID) + "/joins/" + url.PathEscape(id) + "/approve"
+	return a.postJSON(ctx, path, map[string]bool{"ok": true}, nil)
+}
+
+func (a *desktopApp) postJSON(ctx context.Context, path string, in, out any) error {
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(a.cfg.BaseURL, "/")+path, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("server returned %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	if out == nil {
+		io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (a *desktopApp) currentSession() savedSession {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.session
+}
+
+func (a *desktopApp) setStatus(status string, connected bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.status = status
+	a.connected = connected
+}
+
+func (a *desktopApp) notice(message string) {
+	a.mu.Lock()
+	a.lastEvent = message
+	a.mu.Unlock()
+	showNotificationFunc(message)
+}
+
+func (a *desktopApp) snapshot() map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return map[string]any{
+		"baseURL":   a.cfg.BaseURL,
+		"sid":       a.session.SID,
+		"joinLink":  a.joinLink,
+		"status":    a.status,
+		"connected": a.connected,
+		"devices":   a.devices,
+		"lastEvent": a.lastEvent,
+	}
+}

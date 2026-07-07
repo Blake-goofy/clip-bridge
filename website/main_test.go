@@ -758,7 +758,7 @@ func TestAnalyticsPageRendersDashboard(t *testing.T) {
 		"Devices joined",
 		"color: #fff;",
 		`<footer class="site-footer">`,
-		`<a href="/">Home</a> | <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a>`,
+		`<a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a>`,
 		"<polyline",
 	} {
 		if !strings.Contains(body, want) {
@@ -791,13 +791,13 @@ func TestDocumentPagesUseDarkThemeAndFooter(t *testing.T) {
 		{
 			path:          "/privacy",
 			title:         "Privacy Policy",
-			wantFooter:    `<a href="/">Home</a> | <a href="/analytics">Analytics</a> | <a href="/terms">Terms</a> |`,
+			wantFooter:    `<a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | <a href="/analytics">Analytics</a> | <a href="/terms">Terms</a> |`,
 			forbidSelfRef: `<a href="/privacy">Privacy</a>`,
 		},
 		{
 			path:          "/terms",
 			title:         "Terms of Service",
-			wantFooter:    `<a href="/">Home</a> | <a href="/analytics">Analytics</a> | <a href="/privacy">Privacy</a> |`,
+			wantFooter:    `<a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | <a href="/analytics">Analytics</a> | <a href="/privacy">Privacy</a> |`,
 			forbidSelfRef: `<a href="/terms">Terms</a>`,
 		},
 	} {
@@ -837,12 +837,12 @@ func TestDocumentPagesUseDarkThemeAndFooter(t *testing.T) {
 
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
 	ui := indexHTML + appCSS + appJS
-	for _, old := range []string{"Windows", "iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "Add link", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout", "copyConnectURL", "connectURL", "copy-link", "?fragment=", "qrQuery", "session-select", "session-delete", "reveal-delete", "swipeStartX", "readClipboardImage"} {
+	for _, old := range []string{"iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "Add link", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout", "copyConnectURL", "connectURL", "copy-link", "?fragment=", "qrQuery", "session-select", "session-delete", "reveal-delete", "swipeStartX", "readClipboardImage"} {
 		if strings.Contains(ui, old) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="stylesheet" href="/app.css">`, `<script src="/qrcode.js"></script>`, `<script src="/app.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", `class="site-footer"`, "grid-template-rows: minmax(0, 1fr) auto", "min-height: 0", ".app-layout.pc-mode .site-footer", ".site-footer a:hover", "text-decoration: underline", "Analytics", "Privacy", "Terms", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardContent", "readClipboardPreview", "text/plain", "showClipboardPeek", "setupPeekButton", "peekAutoHideMs = 2500", "noticeHiddenQR", "dataset.noticeHidden", "setTimeout(hideNotice, 2500)", "(hover: none) and (pointer: coarse)", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")", "position: sticky", "onMiddleClick", "onauxclick", "deleteDevice(device)", "width: 100vw", "border-radius: 8px 8px 0 0"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="stylesheet" href="/app.css">`, `<script src="/qrcode.js"></script>`, `<script src="/app.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", `class="site-footer"`, "Download for Windows", "grid-template-rows: minmax(0, 1fr) auto", "min-height: 0", ".app-layout.pc-mode .site-footer", ".site-footer a:hover", "text-decoration: underline", "Analytics", "Privacy", "Terms", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardContent", "readClipboardPreview", "text/plain", "showClipboardPeek", "setupPeekButton", "peekAutoHideMs = 2500", "noticeHiddenQR", "dataset.noticeHidden", "setTimeout(hideNotice, 2500)", "(hover: none) and (pointer: coarse)", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")", "position: sticky", "onMiddleClick", "onauxclick", "deleteDevice(device)", "width: 100vw", "border-radius: 8px 8px 0 0"} {
 		if !strings.Contains(ui, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}

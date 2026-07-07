@@ -142,7 +142,7 @@ var documentPageTemplate = template.Must(template.New("document").Parse(`<!docty
     </section>
   </main>
   <footer class="site-footer">
-    <a href="/">Home</a> | {{if ne .Path "/analytics"}}<a href="/analytics">Analytics</a> | {{end}}{{if ne .Path "/privacy"}}<a href="/privacy">Privacy</a> | {{end}}{{if ne .Path "/terms"}}<a href="/terms">Terms</a> | {{end}}<a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
+    <a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | {{if ne .Path "/analytics"}}<a href="/analytics">Analytics</a> | {{end}}{{if ne .Path "/privacy"}}<a href="/privacy">Privacy</a> | {{end}}{{if ne .Path "/terms"}}<a href="/terms">Terms</a> | {{end}}<a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
   </footer>
 </body>
 </html>
@@ -504,7 +504,7 @@ var analyticsPageTemplate = template.Must(template.New("analytics").Parse(`<!doc
     {{end}}
   </main>
   <footer class="site-footer">
-    <a href="/">Home</a> | <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a> | <a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
+    <a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a> | <a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
   </footer>
 </body>
 </html>
@@ -543,6 +543,7 @@ func (a *app) handlePrivacy(w http.ResponseWriter, r *http.Request) {
 		Path:  "/privacy",
 		Paragraphs: []string{
 			"ClipBridge is built to move clipboard content between devices without accounts.",
+			"The Windows app can receive clipboard content without keeping the website open on your PC.",
 			"Clipboard text and images are encrypted in your browser before relay. The server does not intentionally log, inspect, or persist clipboard contents.",
 			"ClipBridge uses first-party cookies for pairing devices and keeping sessions alive.",
 			"Analytics logs store dates and event names for successful device joins and clipboard shares. They do not include clipboard contents, device names, IP addresses, user agents, browser IDs, session IDs, or login identifiers.",

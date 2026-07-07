@@ -1,0 +1,48 @@
+name: Windows Desktop Release
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Test
+        run: go test ./...
+
+      - name: Install Velopack
+        run: dotnet tool install -g vpk
+
+      - name: Download previous Velopack release
+        continue-on-error: true
+        run: vpk download github --repoUrl "https://github.com/${{ github.repository }}" --outputDir Releases --token "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".Replace("desktop-v", "")
+          ./scripts/build-windows.ps1 -Version $version -Pack
+
+      - name: Publish Velopack release
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".Replace("desktop-v", "")
+          vpk upload github --repoUrl "https://github.com/${{ github.repository }}" --publish --releaseName "ClipBridge Desktop $version" --tag "${{ github.ref_name }}" --outputDir Releases --token "${{ secrets.GITHUB_TOKEN }}"

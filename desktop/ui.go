@@ -28,6 +28,21 @@ type approveRequest struct {
 	ID string `json:"id"`
 }
 
+type nameRequest struct {
+	SID  string `json:"sid"`
+	Name string `json:"name"`
+}
+
+type deviceRequest struct {
+	SID      string `json:"sid"`
+	DeviceID string `json:"deviceID"`
+	Name     string `json:"name,omitempty"`
+}
+
+type sessionRequest struct {
+	SID string `json:"sid"`
+}
+
 func startControlServer(ctx context.Context, app *desktopApp) (localBridge, error) {
 	token, err := localBridgeToken()
 	if err != nil {
@@ -113,6 +128,66 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 		}
 		writeLocalJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}))
+	mux.HandleFunc("/session/name", handle(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req nameRequest
+		if err := decodeLocalJSON(w, r, &req); err != nil {
+			return
+		}
+		if err := app.renameSession(r.Context(), req.SID, req.Name); err != nil {
+			writeLocalError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeLocalJSON(w, http.StatusOK, app.snapshot())
+	}))
+	mux.HandleFunc("/session/close", handle(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req sessionRequest
+		if err := decodeLocalJSON(w, r, &req); err != nil {
+			return
+		}
+		if err := app.closeSession(r.Context(), req.SID); err != nil {
+			writeLocalError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeLocalJSON(w, http.StatusOK, app.snapshot())
+	}))
+	mux.HandleFunc("/device/name", handle(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req deviceRequest
+		if err := decodeLocalJSON(w, r, &req); err != nil {
+			return
+		}
+		if err := app.renameDevice(r.Context(), req.SID, req.DeviceID, req.Name); err != nil {
+			writeLocalError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeLocalJSON(w, http.StatusOK, app.snapshot())
+	}))
+	mux.HandleFunc("/device/disconnect", handle(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req deviceRequest
+		if err := decodeLocalJSON(w, r, &req); err != nil {
+			return
+		}
+		if err := app.disconnectDevice(r.Context(), req.SID, req.DeviceID); err != nil {
+			writeLocalError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeLocalJSON(w, http.StatusOK, app.snapshot())
+	}))
 	mux.HandleFunc("/quit", handle(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
@@ -174,6 +249,14 @@ func writeLocalJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func decodeLocalJSON(w http.ResponseWriter, r *http.Request, out any) error {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(out); err != nil {
+		writeLocalError(w, http.StatusBadRequest, "invalid json")
+		return err
+	}
+	return nil
 }
 
 func writeLocalError(w http.ResponseWriter, status int, message string) {

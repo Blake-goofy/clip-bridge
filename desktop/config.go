@@ -99,6 +99,13 @@ func restorePCCookie(jar http.CookieJar, base string, s savedSession) {
 	jar.SetCookies(u, []*http.Cookie{{Name: s.PCCookie, Value: s.PCSecret, Path: "/"}})
 }
 
+func restorePCCookies(jar http.CookieJar, base string, cfg config) {
+	restorePCCookie(jar, base, cfg.Session)
+	for _, s := range cfg.Sessions {
+		restorePCCookie(jar, base, s)
+	}
+}
+
 func pcCookieFromJar(jar http.CookieJar, base, sid string) (name, value string) {
 	if jar == nil || sid == "" {
 		return "", ""

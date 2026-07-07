@@ -78,7 +78,7 @@ func newDesktopApp(ctx context.Context, cancel context.CancelFunc) (*desktopApp,
 	if err != nil {
 		return nil, err
 	}
-	restorePCCookie(jar, cfg.BaseURL, cfg.Session)
+	restorePCCookies(jar, cfg.BaseURL, cfg)
 	app := &desktopApp{
 		cfg:         cfg,
 		configPath:  path,
@@ -423,6 +423,106 @@ func (a *desktopApp) restartRelay() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+func (a *desktopApp) renameSession(ctx context.Context, sid, name string) error {
+	sid = strings.TrimSpace(sid)
+	name = strings.TrimSpace(name)
+	if sid == "" || name == "" {
+		return errors.New("missing session name")
+	}
+	if err := a.postJSON(ctx, "/api/session/"+url.PathEscape(sid)+"/name", map[string]string{"name": name}, nil); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	for i := range a.cfg.Sessions {
+		if a.cfg.Sessions[i].SID == sid {
+			a.cfg.Sessions[i].DisplayName = name
+		}
+	}
+	if a.session.SID == sid {
+		a.session.DisplayName = name
+		a.cfg.Session = a.session
+	}
+	if a.configPath != "" {
+		_ = saveConfig(a.configPath, a.cfg)
+	}
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *desktopApp) renameDevice(ctx context.Context, sid, deviceID, name string) error {
+	sid = strings.TrimSpace(sid)
+	deviceID = strings.TrimSpace(deviceID)
+	name = strings.TrimSpace(name)
+	if sid == "" || deviceID == "" || name == "" {
+		return errors.New("missing device name")
+	}
+	path := "/api/session/" + url.PathEscape(sid) + "/devices/" + url.PathEscape(deviceID) + "/name"
+	return a.postJSON(ctx, path, map[string]string{"name": name}, nil)
+}
+
+func (a *desktopApp) disconnectDevice(ctx context.Context, sid, deviceID string) error {
+	sid = strings.TrimSpace(sid)
+	deviceID = strings.TrimSpace(deviceID)
+	if sid == "" || deviceID == "" {
+		return errors.New("missing device")
+	}
+	path := "/api/session/" + url.PathEscape(sid) + "/devices/" + url.PathEscape(deviceID) + "/disconnect"
+	return a.postJSON(ctx, path, map[string]bool{}, nil)
+}
+
+func (a *desktopApp) closeSession(ctx context.Context, sid string) error {
+	sid = strings.TrimSpace(sid)
+	if sid == "" {
+		return errors.New("missing session")
+	}
+	if err := a.postJSON(ctx, "/api/session/"+url.PathEscape(sid)+"/close", map[string]bool{}, nil); err != nil {
+		return err
+	}
+	var next savedSession
+	a.mu.Lock()
+	a.cfg.Sessions = removeSavedSession(a.cfg.Sessions, sid)
+	wasActive := a.session.SID == sid
+	if wasActive {
+		a.session = savedSession{}
+		a.cfg.Session = savedSession{}
+		if len(a.cfg.Sessions) > 0 {
+			next = a.cfg.Sessions[0]
+		}
+	}
+	if a.configPath != "" {
+		_ = saveConfig(a.configPath, a.cfg)
+	}
+	a.mu.Unlock()
+	if !wasActive {
+		return nil
+	}
+	if next.SID != "" {
+		s, err := a.resumeSession(ctx, next)
+		if err == nil {
+			a.activateSession(s, "Ready.")
+			a.restartRelay()
+			return nil
+		}
+	}
+	s, err := a.createSession(ctx)
+	if err != nil {
+		return err
+	}
+	a.activateSession(s, "Ready.")
+	a.restartRelay()
+	return nil
+}
+
+func removeSavedSession(sessions []savedSession, sid string) []savedSession {
+	out := sessions[:0]
+	for _, s := range sessions {
+		if s.SID != sid {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (a *desktopApp) approveJoin(ctx context.Context, id string) error {

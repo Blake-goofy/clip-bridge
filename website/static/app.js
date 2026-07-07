@@ -233,7 +233,12 @@ async function renameActiveSession() {
   if (!activeSession) return;
   const name = cleanName(sessionNameInput.value, sessionLabel(activeSession));
   try {
-    await postJSON(`/api/session/${encodeURIComponent(activeSession.sid)}/name`, { name });
+    if (localBridge) {
+      await localFetch("/session/name", { sid: activeSession.sid, name });
+      await refreshLocalStatus();
+    } else {
+      await postJSON(`/api/session/${encodeURIComponent(activeSession.sid)}/name`, { name });
+    }
     activeSession.name = name;
     upsertSession(activeSession);
     showNotice("Session renamed", "success", "");
@@ -377,12 +382,14 @@ async function renameActiveDevice() {
           .filter((target) => target.deviceID)
       : [{ sid, deviceID: activeDevice.id }];
     if (targets.length === 0) targets = [{ sid, deviceID: activeDevice.id }];
-    const results = await Promise.allSettled(targets.map((target) =>
-      postJSON(`/api/session/${encodeURIComponent(target.sid)}/devices/${encodeURIComponent(target.deviceID)}/name`, { name })
+    const results = await Promise.allSettled(targets.map((target) => localBridge
+      ? localFetch("/device/name", { sid: target.sid, deviceID: target.deviceID, name })
+      : postJSON(`/api/session/${encodeURIComponent(target.sid)}/devices/${encodeURIComponent(target.deviceID)}/name`, { name })
     ));
     if (!results.some((result) => result.status === "fulfilled")) {
       throw results.find((result) => result.status === "rejected").reason;
     }
+    if (localBridge) await refreshLocalStatus();
     showNotice("Device renamed", "success", "");
     closeModal();
   } catch (err) {
@@ -401,7 +408,12 @@ async function deleteDevice(device) {
     return;
   }
   try {
-    await postJSON(`/api/session/${encodeURIComponent(sid)}/devices/${encodeURIComponent(device.id)}/disconnect`);
+    if (localBridge) {
+      await localFetch("/device/disconnect", { sid, deviceID: device.id });
+      await refreshLocalStatus();
+    } else {
+      await postJSON(`/api/session/${encodeURIComponent(sid)}/devices/${encodeURIComponent(device.id)}/disconnect`);
+    }
     showNotice("Device deleted", "success", "");
     if (activeDevice && activeDevice.id === device.id) closeModal();
   } catch (err) {
@@ -573,12 +585,23 @@ async function deleteSession(session) {
   deviceCache.delete(session.sid);
   joinRequestCache.delete(session.sid);
   activeDeviceIDs.delete(session.sid);
-  try {
-    await postJSON(`/api/session/${encodeURIComponent(session.sid)}/close`);
-  } catch (_) {}
+  if (localBridge) {
+    try {
+      await localFetch("/session/close", { sid: session.sid });
+    } catch (err) {
+      showNotice(err.message, "error", "");
+      return;
+    }
+  } else {
+    try {
+      await postJSON(`/api/session/${encodeURIComponent(session.sid)}/close`);
+    } catch (_) {}
+  }
   sessions = sessions.filter((candidate) => candidate.sid !== session.sid);
   saveSessions();
-  if (sid === session.sid) {
+  if (localBridge) {
+    await refreshLocalStatus();
+  } else if (sid === session.sid) {
     if (sessions.length > 0) {
       selectSession(sessions[0], true);
     } else {

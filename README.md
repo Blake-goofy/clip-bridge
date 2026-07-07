@@ -19,7 +19,7 @@ $env:CLIPBRIDGE_SERVER="http://localhost:8080"
 go run ./desktop
 ```
 
-The desktop app opens a local control page with a QR code. The Go process receives clipboard data, writes it to the Windows clipboard, and shows Windows notifications even after the public ClipBridge website is closed on the PC.
+The desktop app opens the public ClipBridge site for its active session and passes it a private localhost bridge token. The Go process receives clipboard data, writes it to the Windows clipboard, and shows Windows notifications even if the site is only being used as the app's control surface.
 
 ## Features
 
@@ -37,7 +37,7 @@ The desktop app opens a local control page with a QR code. The Go process receiv
 ## Deploy
 
 - Railway can run this as a single Go service.
-- Set `PUBLIC_BASE_URL=https://clipbridge.app` if the app is behind a proxy or custom domain.
+- Set `PUBLIC_BASE_URL=https://clipbridge.cc` if the app is behind a proxy or custom domain.
 - Keep one instance for now. Sessions, device names, and join-link aliases are intentionally in memory and disappear when the process restarts or the session expires.
 - Analytics are appended to `analytics.jsonl` by default. Set `ANALYTICS_PATH=/path/to/analytics.jsonl` to choose a persistent volume path, or `ANALYTICS_PATH=off` to disable analytics.
 
@@ -61,7 +61,7 @@ The script writes the app to `dist\desktop` and Velopack releases to `Releases`.
 
 - No accounts, database, or third-party frontend assets.
 - Clipboard text and images are encrypted in the browser with AES-GCM before relay. The server relays ciphertext in memory and does not log or persist clipboard contents.
-- The Windows app uses the same AES-GCM payload format. Its saved config contains server URL, session ID, local session key, and pairing cookie, but not clipboard contents.
+- The Windows app uses the same AES-GCM payload format. Its saved config contains server URL, app-owned session IDs, local session keys, and pairing cookies, but not clipboard contents.
 - Analytics logs store only dates and event names for successful device joins and clipboard shares; they do not store clipboard contents, device names, IP addresses, user agents, browser IDs, or session IDs.
 - Join links keep the encryption key in the URL fragment, which browsers do not send in normal HTTP requests. QR codes are rendered in the browser, so the key is not sent in a QR generation request.
 - A copied link or QR code only starts a pending join; a connected device still has to allow the new device before it receives a session cookie.

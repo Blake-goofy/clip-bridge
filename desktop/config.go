@@ -10,11 +10,14 @@ import (
 	"strings"
 )
 
-const defaultBaseURL = "https://clipbridge.app"
+const (
+	defaultBaseURL = "https://clipbridge.cc"
+)
 
 type config struct {
-	BaseURL string       `json:"baseUrl"`
-	Session savedSession `json:"session"`
+	BaseURL  string         `json:"baseUrl"`
+	Session  savedSession   `json:"session"`
+	Sessions []savedSession `json:"sessions,omitempty"`
 }
 
 type savedSession struct {
@@ -45,6 +48,9 @@ func loadConfig() (config, string, error) {
 	cfg.BaseURL = cleanBaseURL(cfg.BaseURL)
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultServerBaseURL()
+	}
+	if len(cfg.Sessions) == 0 && cfg.Session.SID != "" {
+		cfg.Sessions = []savedSession{cfg.Session}
 	}
 	return cfg, path, nil
 }

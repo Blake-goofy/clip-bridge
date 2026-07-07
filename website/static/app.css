@@ -328,6 +328,9 @@ button:disabled {
 .session-row.active .session-status {
   background: #174ea6;
 }
+.session-row.local-active .session-status {
+  background: #16a34a;
+}
 .session-name {
   min-width: 0;
   color: #171717;

@@ -2,144 +2,129 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
-	"html/template"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
-
-	qrcode "github.com/skip2/go-qrcode"
 )
 
-var controlTemplate = template.Must(template.New("control").Parse(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ClipBridge Desktop</title>
-  <style>
-    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, Segoe UI, sans-serif; background: #f8f8f3; color: #171717; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 22px; }
-    main { width: min(100%, 420px); display: grid; gap: 16px; text-align: center; }
-    h1 { margin: 0; font-size: 34px; line-height: 1; letter-spacing: 0; }
-    .tagline { margin: 0; color: #5c6257; font-weight: 650; }
-    .qr { width: min(100%, 280px); aspect-ratio: 1; justify-self: center; border: 1px solid #d9dbd2; border-radius: 8px; padding: 12px; background: #fff; }
-    .qr img { width: 100%; height: 100%; display: block; }
-    .status { min-height: 76px; border: 1px solid #d9dbd2; border-radius: 8px; padding: 14px; display: grid; gap: 6px; background: #fff; text-align: left; }
-    .status strong { font-size: 15px; }
-    .muted { color: #5c6257; font-size: 13px; line-height: 1.35; word-break: break-word; }
-    .actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
-    button, a.button { min-height: 44px; border: 0; border-radius: 8px; padding: 0 16px; display: inline-flex; align-items: center; justify-content: center; background: #174ea6; color: #fff; font: inherit; font-weight: 750; cursor: pointer; text-decoration: none; }
-    button.secondary, a.secondary { background: #fff; color: #174ea6; border: 1px solid #d9dbd2; }
-    button.danger { background: #fff1f2; color: #be123c; border: 1px solid #fecaca; }
-    @media (prefers-color-scheme: dark) {
-      :root { background: #11130f; color: #f4f4ef; }
-      .tagline, .muted { color: #b9beb1; }
-      .status { background: #1b1d18; border-color: #34372f; }
-      button.secondary, a.secondary { background: #252820; border-color: #34372f; color: #8ab4f8; }
-      button.danger { background: #4c0519; border-color: #881337; color: #fecdd3; }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <header>
-      <h1>ClipBridge</h1>
-      <p class="tagline">Windows receiver</p>
-    </header>
-    <a class="qr" href="{{.JoinLink}}" title="Open join link"><img src="/qr.png" alt="QR code for pairing"></a>
-    <section class="status">
-      <strong>{{.Status}}</strong>
-      <span class="muted">{{.Devices}} connected device{{if ne .Devices 1}}s{{end}}</span>
-      <span class="muted">{{.LastEvent}}</span>
-      <span class="muted">{{.JoinLink}}</span>
-    </section>
-    <form class="actions" method="post">
-      <button formaction="/send" type="submit">Send clipboard</button>
-      <button class="secondary" formaction="/copy-link" type="submit">Copy link</button>
-      <button class="danger" formaction="/quit" type="submit">Quit</button>
-    </form>
-  </main>
-  <script>setTimeout(() => location.reload(), 2500);</script>
-</body>
-</html>`))
-
-type controlPage struct {
-	JoinLink  string
-	Status    string
-	Devices   int
-	LastEvent string
+type localBridge struct {
+	BaseURL string
+	Token   string
 }
 
-func startControlServer(ctx context.Context, app *desktopApp) (string, error) {
+type activateRequest struct {
+	SID string `json:"sid"`
+	Key string `json:"key"`
+}
+
+type approveRequest struct {
+	ID string `json:"id"`
+}
+
+func startControlServer(ctx context.Context, app *desktopApp) (localBridge, error) {
+	token, err := localBridgeToken()
+	if err != nil {
+		return localBridge{}, err
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
+	handle := func(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !allowLocalRequest(w, r, app.cfg.BaseURL, token) {
+				return
+			}
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			fn(w, r)
+		}
+	}
+	mux.HandleFunc("/status.json", handle(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
 			http.NotFound(w, r)
 			return
 		}
-		s := app.snapshot()
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = controlTemplate.Execute(w, controlPage{
-			JoinLink:  s["joinLink"].(string),
-			Status:    s["status"].(string),
-			Devices:   s["devices"].(int),
-			LastEvent: s["lastEvent"].(string),
-		})
-	})
-	mux.HandleFunc("/qr.png", func(w http.ResponseWriter, r *http.Request) {
-		link := app.snapshot()["joinLink"].(string)
-		png, err := qrcode.Encode(link, qrcode.Medium, 320)
-		if err != nil {
-			http.Error(w, "could not render qr", http.StatusInternalServerError)
+		writeLocalJSON(w, http.StatusOK, app.snapshot())
+	}))
+	mux.HandleFunc("/session", handle(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write(png)
-	})
-	mux.HandleFunc("/status.json", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(app.snapshot())
-	})
-	mux.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
+		s, err := app.createSession(r.Context())
+		if err != nil {
+			writeLocalError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		app.activateSession(s, "Ready.")
+		app.restartRelay()
+		writeLocalJSON(w, http.StatusCreated, map[string]string{"sid": s.SID, "key": s.Key, "name": s.DisplayName})
+	}))
+	mux.HandleFunc("/activate", handle(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req activateRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			writeLocalError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if err := app.activateKnownSession(r.Context(), req.SID, req.Key); err != nil {
+			writeLocalError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeLocalJSON(w, http.StatusOK, app.snapshot())
+	}))
+	mux.HandleFunc("/send", handle(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
 		if err := app.sendClipboard(r.Context()); err != nil {
 			log.Printf("send clipboard: %v", err)
+			writeLocalError(w, http.StatusBadGateway, err.Error())
+			return
 		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	})
-	mux.HandleFunc("/copy-link", func(w http.ResponseWriter, r *http.Request) {
+		writeLocalJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+	}))
+	mux.HandleFunc("/approve", handle(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
-		link := app.snapshot()["joinLink"].(string)
-		if err := writeClipboardTextFunc(link); err != nil {
-			app.notice("Copy link failed")
-		} else {
-			app.notice("Link copied")
+		var req approveRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			writeLocalError(w, http.StatusBadRequest, "invalid json")
+			return
 		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	})
-	mux.HandleFunc("/quit", func(w http.ResponseWriter, r *http.Request) {
+		if err := app.approveJoin(r.Context(), req.ID); err != nil {
+			log.Printf("allow join: %v", err)
+			writeLocalError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeLocalJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}))
+	mux.HandleFunc("/quit", handle(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
 		go app.cancel()
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte("<!doctype html><title>ClipBridge</title><p>ClipBridge is shutting down.</p>"))
-	})
+		writeLocalJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+	}))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", err
+		return localBridge{}, err
 	}
 	server := &http.Server{Handler: mux}
 	go func() {
@@ -155,5 +140,50 @@ func startControlServer(ctx context.Context, app *desktopApp) (string, error) {
 		}
 	}()
 	port := ln.Addr().(*net.TCPAddr).Port
-	return "http://127.0.0.1:" + strconv.Itoa(port), nil
+	return localBridge{BaseURL: "http://127.0.0.1:" + strconv.Itoa(port), Token: token}, nil
+}
+
+func allowLocalRequest(w http.ResponseWriter, r *http.Request, siteBaseURL, token string) bool {
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		site, err := url.Parse(siteBaseURL)
+		if err != nil || origin != site.Scheme+"://"+site.Host {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return false
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+	}
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-ClipBridge-Token")
+	if r.Method == http.MethodOptions {
+		return true
+	}
+	got := r.Header.Get("X-ClipBridge-Token")
+	if got == "" {
+		got = r.URL.Query().Get("token")
+	}
+	if got == "" || got != token {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+func writeLocalJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeLocalError(w http.ResponseWriter, status int, message string) {
+	writeLocalJSON(w, status, map[string]string{"error": message})
+}
+
+func localBridgeToken() (string, error) {
+	var b [24]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(base64.URLEncoding.EncodeToString(b[:]), "="), nil
 }

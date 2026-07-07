@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -18,17 +19,26 @@ import (
 )
 
 type desktopApp struct {
-	mu         sync.Mutex
-	cfg        config
-	configPath string
-	client     *http.Client
-	session    savedSession
-	joinLink   string
-	status     string
-	connected  bool
-	devices    int
-	lastEvent  string
-	cancel     context.CancelFunc
+	mu          sync.Mutex
+	cfg         config
+	configPath  string
+	client      *http.Client
+	session     savedSession
+	joinLink    string
+	status      string
+	connected   bool
+	devices     int
+	deviceList  []deviceView
+	joinList    []joinRequestView
+	lastEvent   string
+	cancel      context.CancelFunc
+	uiURL       string
+	uiToken     string
+	uiOpening   bool
+	logPath     string
+	pendingSeen map[string]bool
+	relayCancel context.CancelFunc
+	relayID     int
 }
 
 type apiSession struct {
@@ -61,7 +71,8 @@ type joinRequestView struct {
 func newDesktopApp(ctx context.Context, cancel context.CancelFunc) (*desktopApp, error) {
 	cfg, path, err := loadConfig()
 	if err != nil {
-		return nil, err
+		cfg = config{BaseURL: defaultServerBaseURL()}
+		path = ""
 	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -69,14 +80,13 @@ func newDesktopApp(ctx context.Context, cancel context.CancelFunc) (*desktopApp,
 	}
 	restorePCCookie(jar, cfg.BaseURL, cfg.Session)
 	app := &desktopApp{
-		cfg:        cfg,
-		configPath: path,
-		client:     &http.Client{Jar: jar, Timeout: 20 * time.Second},
-		status:     "Starting...",
-		cancel:     cancel,
-	}
-	if err := app.ensureSession(ctx); err != nil {
-		return nil, err
+		cfg:         cfg,
+		configPath:  path,
+		client:      &http.Client{Jar: jar, Timeout: 20 * time.Second},
+		status:      "Starting...",
+		cancel:      cancel,
+		logPath:     logPath(),
+		pendingSeen: make(map[string]bool),
 	}
 	return app, nil
 }
@@ -84,7 +94,16 @@ func newDesktopApp(ctx context.Context, cancel context.CancelFunc) (*desktopApp,
 func (a *desktopApp) ensureSession(ctx context.Context) error {
 	if a.cfg.Session.SID != "" && a.cfg.Session.Key != "" {
 		if s, err := a.resumeSession(ctx, a.cfg.Session); err == nil {
-			a.setSession(s, "Ready.")
+			a.activateSession(s, "Ready.")
+			return nil
+		}
+	}
+	for _, saved := range a.cfg.Sessions {
+		if saved.SID == "" || saved.Key == "" {
+			continue
+		}
+		if s, err := a.resumeSession(ctx, saved); err == nil {
+			a.activateSession(s, "Ready.")
 			return nil
 		}
 	}
@@ -92,7 +111,7 @@ func (a *desktopApp) ensureSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	a.setSession(s, "Ready.")
+	a.activateSession(s, "Ready.")
 	return nil
 }
 
@@ -128,44 +147,103 @@ func (a *desktopApp) resumeSession(ctx context.Context, s savedSession) (savedSe
 	return s, nil
 }
 
-func (a *desktopApp) setSession(s savedSession, status string) {
+func (a *desktopApp) activateSession(s savedSession, status string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.session = s
 	a.cfg.Session = s
+	a.upsertSavedSessionLocked(s)
 	a.joinLink = joinLink(a.cfg.BaseURL, s.SID, s.Key)
 	a.status = status
-	_ = saveConfig(a.configPath, a.cfg)
+	a.connected = false
+	a.devices = 0
+	a.deviceList = nil
+	a.joinList = nil
+	a.pendingSeen = make(map[string]bool)
+	if a.configPath != "" {
+		_ = saveConfig(a.configPath, a.cfg)
+	}
+}
+
+func (a *desktopApp) upsertSavedSessionLocked(s savedSession) {
+	for i := range a.cfg.Sessions {
+		if a.cfg.Sessions[i].SID == s.SID {
+			a.cfg.Sessions[i] = s
+			return
+		}
+	}
+	a.cfg.Sessions = append(a.cfg.Sessions, s)
 }
 
 func joinLink(base, sid, key string) string {
+	if sid == "" || key == "" {
+		return ""
+	}
 	return strings.TrimRight(base, "/") + "/s/" + url.PathEscape(sid) + "#k=" + url.QueryEscape(key)
 }
 
-func (a *desktopApp) connectLoop(ctx context.Context) {
+func (a *desktopApp) runRelay(ctx context.Context) {
 	for {
-		if err := a.connectOnce(ctx); err != nil && ctx.Err() == nil {
-			a.setStatus("Reconnecting...", false)
-			time.Sleep(time.Second)
-			continue
-		}
 		if ctx.Err() != nil {
 			return
+		}
+		if !a.hasSession() {
+			a.setStatus("Creating session...", false)
+			if err := a.ensureSession(ctx); err != nil {
+				a.setError("Could not create session", err)
+				sleepOrDone(ctx, 5*time.Second)
+				continue
+			}
+		}
+		if err := a.connectOnce(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			a.setError("Reconnecting", err)
+			sleepOrDone(ctx, time.Second)
 		}
 	}
 }
 
+func sleepOrDone(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+func (a *desktopApp) hasSession() bool {
+	s := a.currentSession()
+	return s.SID != "" && s.Key != "" && s.PCCookie != "" && s.PCSecret != ""
+}
+
 func (a *desktopApp) connectOnce(ctx context.Context) error {
 	s := a.currentSession()
+	connectCtx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.relayID++
+	relayID := a.relayID
+	a.relayCancel = cancel
+	a.mu.Unlock()
+	defer func() {
+		cancel()
+		a.mu.Lock()
+		if a.relayID == relayID {
+			a.relayCancel = nil
+		}
+		a.mu.Unlock()
+	}()
 	wsURL := strings.TrimRight(a.cfg.BaseURL, "/") + "/ws/" + url.PathEscape(s.SID) + "/pc"
-	c, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: a.client})
+	c, _, err := websocket.Dial(connectCtx, wsURL, &websocket.DialOptions{HTTPClient: a.client})
 	if err != nil {
 		return err
 	}
 	defer c.Close(websocket.StatusNormalClosure, "")
 	a.setStatus("Connected.", true)
 	for {
-		_, b, err := c.Read(ctx)
+		_, b, err := c.Read(connectCtx)
 		if err != nil {
 			return err
 		}
@@ -187,12 +265,20 @@ func (a *desktopApp) handleEvent(ctx context.Context, ev relayEvent) {
 				connected++
 			}
 		}
+		var newPending []string
 		a.mu.Lock()
 		a.devices = connected
-		a.mu.Unlock()
+		a.deviceList = append([]deviceView(nil), ev.Devices...)
+		a.joinList = append([]joinRequestView(nil), ev.JoinRequests...)
 		for _, req := range ev.JoinRequests {
-			// ponytail: v1 trusts scans while the desktop app is open; add a manual approval prompt if shared PCs need stricter pairing.
-			_ = a.approveJoin(ctx, req.ID)
+			if !a.pendingSeen[req.ID] {
+				a.pendingSeen[req.ID] = true
+				newPending = append(newPending, req.Name)
+			}
+		}
+		a.mu.Unlock()
+		for range newPending {
+			a.notice("New device wants to connect")
 		}
 	case "clipboard.encrypted":
 		payload, err := decryptPayload(a.currentSession().Key, ev.Data)
@@ -250,6 +336,95 @@ func (a *desktopApp) sendClipboard(ctx context.Context) error {
 	return nil
 }
 
+func (a *desktopApp) openUI() {
+	a.mu.Lock()
+	if a.uiOpening {
+		a.mu.Unlock()
+		return
+	}
+	target := a.siteUIURLLocked()
+	a.uiOpening = true
+	a.mu.Unlock()
+
+	if target == "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := a.ensureSession(ctx)
+		cancel()
+		if err != nil {
+			log.Printf("open ui ensure session: %v", err)
+			a.notice("UI is not ready")
+			a.mu.Lock()
+			a.uiOpening = false
+			a.mu.Unlock()
+			return
+		}
+		a.mu.Lock()
+		target = a.siteUIURLLocked()
+		a.mu.Unlock()
+	}
+	log.Printf("open ui: %s", target)
+	if err := openBrowser(target); err != nil {
+		log.Printf("open ui failed: %v", err)
+		a.notice("Could not open ClipBridge")
+	}
+	time.AfterFunc(1500*time.Millisecond, func() {
+		a.mu.Lock()
+		a.uiOpening = false
+		a.mu.Unlock()
+	})
+}
+
+func (a *desktopApp) setUIURL(value, token string) {
+	a.mu.Lock()
+	a.uiURL = value
+	a.uiToken = token
+	a.mu.Unlock()
+}
+
+func (a *desktopApp) siteUIURLLocked() string {
+	if a.joinLink == "" || a.uiURL == "" || a.uiToken == "" {
+		return a.joinLink
+	}
+	return a.joinLink + "&local=" + url.QueryEscape(a.uiURL) + "&localToken=" + url.QueryEscape(a.uiToken)
+}
+
+func (a *desktopApp) activateKnownSession(ctx context.Context, sid, key string) error {
+	sid = strings.TrimSpace(sid)
+	key = strings.TrimSpace(key)
+	if sid == "" || key == "" {
+		return errors.New("missing session")
+	}
+	a.mu.Lock()
+	var saved savedSession
+	for _, candidate := range a.cfg.Sessions {
+		if candidate.SID == sid {
+			saved = candidate
+			break
+		}
+	}
+	a.mu.Unlock()
+	if saved.SID == "" {
+		return errors.New("session is not paired with this app")
+	}
+	saved.Key = key
+	s, err := a.resumeSession(ctx, saved)
+	if err != nil {
+		return err
+	}
+	a.activateSession(s, "Ready.")
+	a.restartRelay()
+	return nil
+}
+
+func (a *desktopApp) restartRelay() {
+	a.mu.Lock()
+	cancel := a.relayCancel
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (a *desktopApp) approveJoin(ctx context.Context, id string) error {
 	if id == "" {
 		return nil
@@ -301,6 +476,14 @@ func (a *desktopApp) setStatus(status string, connected bool) {
 	a.connected = connected
 }
 
+func (a *desktopApp) setError(status string, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.status = status + "."
+	a.connected = false
+	a.lastEvent = err.Error()
+}
+
 func (a *desktopApp) notice(message string) {
 	a.mu.Lock()
 	a.lastEvent = message
@@ -312,12 +495,16 @@ func (a *desktopApp) snapshot() map[string]any {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return map[string]any{
-		"baseURL":   a.cfg.BaseURL,
-		"sid":       a.session.SID,
-		"joinLink":  a.joinLink,
-		"status":    a.status,
-		"connected": a.connected,
-		"devices":   a.devices,
-		"lastEvent": a.lastEvent,
+		"baseURL":    a.cfg.BaseURL,
+		"sid":        a.session.SID,
+		"key":        a.session.Key,
+		"joinLink":   a.joinLink,
+		"status":     a.status,
+		"connected":  a.connected,
+		"devices":    a.devices,
+		"deviceList": append([]deviceView(nil), a.deviceList...),
+		"joinList":   append([]joinRequestView(nil), a.joinList...),
+		"lastEvent":  a.lastEvent,
+		"logPath":    a.logPath,
 	}
 }

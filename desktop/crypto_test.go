@@ -26,7 +26,7 @@ func TestEncryptDecryptPayload(t *testing.T) {
 }
 
 func TestJoinLinkKeepsKeyInFragment(t *testing.T) {
-	link := joinLink("https://clipbridge.app/", "abc123", "secret-key")
+	link := joinLink("https://clipbridge.cc/", "abc123", "secret-key")
 	if strings.Contains(link, "?") {
 		t.Fatalf("join link leaked key into query: %s", link)
 	}

@@ -26,6 +26,9 @@ const storageKey = "clipbridge.sid";
 const sessionsKey = "clipbridge.sessions.v1";
 let sid = sessionMatch ? sessionMatch[1] : "";
 let sessionKey = "";
+const localBridge = localBridgeFromHash();
+let localActiveSID = "";
+let localPollTimer = null;
 let linkURL = "";
 let joined = false;
 let activeSession = null;
@@ -131,11 +134,12 @@ function renderSessions() {
 
 function sessionRow(session) {
   const isActive = session.sid === sid;
+  const isLocal = session.sid === localActiveSID;
   const row = document.createElement("div");
-  row.className = `session-row ${isActive ? "active" : ""}`;
+  row.className = `session-row ${isActive ? "active" : ""} ${isLocal ? "local-active" : ""}`;
   row.tabIndex = 0;
   row.setAttribute("role", "button");
-  row.setAttribute("aria-label", `${isActive ? "Edit" : "Select"} ${sessionLabel(session)}${isActive ? ", current session" : ""}`);
+  row.setAttribute("aria-label", `${isActive ? "Edit" : "Select"} ${sessionLabel(session)}${isActive ? ", current session" : ""}${isLocal ? ", active on this PC" : ""}`);
   row.onclick = () => {
     if (isActive) {
       openSessionModal(session);
@@ -162,7 +166,8 @@ function sessionRow(session) {
 
   const status = document.createElement("span");
   status.className = "session-status";
-  status.setAttribute("aria-label", isActive ? "Current session" : "Saved session");
+  status.setAttribute("aria-label", isLocal ? "Active on this PC" : (isActive ? "Current session" : "Saved session"));
+  status.title = isLocal ? "Active on this PC" : "";
 
   const name = document.createElement("div");
   name.className = "session-name";
@@ -182,7 +187,7 @@ function sessionRow(session) {
 
   const meta = document.createElement("div");
   meta.className = "session-meta";
-  meta.textContent = `${plural(connectedDeviceCount(session.sid), "device")} connected`;
+  meta.textContent = `${plural(connectedDeviceCount(session.sid), "device")} connected${isLocal ? " · local" : ""}`;
 
   row.append(status, name, edit, meta);
   return row;
@@ -286,7 +291,11 @@ function joinRequestRow(request) {
 
 async function approveJoin(requestID) {
   try {
-    await postJSON(`/api/session/${encodeURIComponent(sid)}/joins/${encodeURIComponent(requestID)}/approve`);
+    if (localBridge && sid === localActiveSID) {
+      await localFetch("/approve", { id: requestID });
+    } else {
+      await postJSON(`/api/session/${encodeURIComponent(sid)}/joins/${encodeURIComponent(requestID)}/approve`);
+    }
     showNotice("Device allowed", "success", "");
   } catch (err) {
     showNotice(err.message, "error", "");
@@ -505,8 +514,9 @@ function selectSession(session, updateURL) {
   renderSessions();
   renderDevices(deviceCache.get(sid) || [], joinRequestCache.get(sid) || []);
   if (updateURL) {
-    history.replaceState(null, "", `/s/${encodeURIComponent(sid)}#k=${encodeURIComponent(sessionKey)}`);
+    history.replaceState(null, "", `/s/${encodeURIComponent(sid)}${sessionHash()}`);
   }
+  if (localBridge && pageRole === "pc" && sid !== localActiveSID) activateLocalSession(session);
 }
 
 function setJoinLink(joinSID) {
@@ -544,11 +554,11 @@ function drawQRCode(canvas, text) {
 
 addSession.onclick = async () => {
   try {
-    const data = await postJSON("/api/session");
-    const session = { sid: data.sid, key: randomSessionKey(), name: nextSessionName() };
+    const data = localBridge ? await localFetch("/session") : await postJSON("/api/session");
+    const session = { sid: data.sid, key: data.key || randomSessionKey(), name: data.name || nextSessionName() };
     upsertSession(session);
     selectSession(session, true);
-    connectPCSession(session);
+    if (!localBridge) connectPCSession(session);
     showNotice("Session added", "success", linkURL);
   } catch (err) {
     showNotice(err.message, "error", "");
@@ -640,6 +650,104 @@ function rememberSID(value) {
       localStorage.removeItem(storageKey);
     }
   } catch (_) {}
+}
+
+function hashParams() {
+  try {
+    return new URLSearchParams(location.hash.slice(1));
+  } catch (_) {
+    return new URLSearchParams();
+  }
+}
+
+function localBridgeFromHash() {
+  const params = hashParams();
+  const baseURL = params.get("local") || "";
+  const token = params.get("localToken") || "";
+  if (!baseURL || !token) return null;
+  try {
+    const parsed = new URL(baseURL);
+    if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") return null;
+    return { baseURL: parsed.origin, token };
+  } catch (_) {
+    return null;
+  }
+}
+
+function sessionHash() {
+  const params = new URLSearchParams();
+  if (sessionKey) params.set("k", sessionKey);
+  if (localBridge) {
+    params.set("local", localBridge.baseURL);
+    params.set("localToken", localBridge.token);
+  }
+  const value = params.toString();
+  return value ? `#${value}` : "";
+}
+
+async function localFetch(path, body) {
+  const res = await fetch(`${localBridge.baseURL}${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    mode: "cors",
+    headers: {
+      "Content-Type": "application/json",
+      "X-ClipBridge-Token": localBridge.token
+    },
+    body: body === undefined ? undefined : JSON.stringify(body || {})
+  });
+  if (!res.ok) {
+    let message = "Local app request failed";
+    try {
+      const data = await res.json();
+      message = data.error || message;
+    } catch (_) {}
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+function applyLocalStatus(data) {
+  if (!data || !data.sid) return;
+  localActiveSID = data.sid;
+  const existing = sessions.find((item) => item.sid === data.sid);
+  const session = {
+    sid: data.sid,
+    key: data.key || sessionKey || sessionKeyFromHash(),
+    name: (existing && existing.name) || "Windows PC"
+  };
+  upsertSession(session);
+  sessionKey = session.key;
+  if (sid !== data.sid) {
+    sid = data.sid;
+    rememberSID(sid);
+    setJoinLink(sid);
+    history.replaceState(null, "", `/s/${encodeURIComponent(sid)}${sessionHash()}`);
+  }
+  deviceCache.set(data.sid, data.deviceList || []);
+  joinRequestCache.set(data.sid, data.joinList || []);
+  const active = (data.deviceList || []).find((device) => device.active);
+  if (active) activeDeviceIDs.set(data.sid, active.id);
+  renderDevices(data.deviceList || [], data.joinList || []);
+  renderSessions();
+  document.querySelector("#pcStatus").textContent = data.connected ? "Ready." : (data.status || "Connecting...");
+}
+
+async function refreshLocalStatus() {
+  try {
+    applyLocalStatus(await localFetch("/status.json"));
+  } catch (err) {
+    document.querySelector("#pcStatus").textContent = err.message;
+  }
+}
+
+async function activateLocalSession(session) {
+  try {
+    const data = await localFetch("/activate", { sid: session.sid, key: session.key });
+    applyLocalStatus(data);
+  } catch (err) {
+    showNotice(err.message, "error", "");
+    renderSessions();
+  }
 }
 
 async function pcSession() {
@@ -894,11 +1002,7 @@ async function writeImageClipboard(image) {
 }
 
 function sessionKeyFromHash() {
-  try {
-    return new URLSearchParams(location.hash.slice(1)).get("k") || "";
-  } catch (_) {
-    return "";
-  }
+  return hashParams().get("k") || "";
 }
 
 function randomSessionKey() {
@@ -1105,6 +1209,18 @@ document.addEventListener("pointercancel", (event) => {
 });
 
 async function sendClipboard(status, messages) {
+  if (localBridge && pageRole === "pc" && sid === localActiveSID) {
+    try {
+      await localFetch("/send", {});
+      status.textContent = "Sent.";
+      showNotice("Sent", "success", "");
+      await refreshLocalStatus();
+    } catch (err) {
+      status.textContent = err.message;
+      showNotice(err.message, "error", "");
+    }
+    return;
+  }
   let content;
   try {
     content = await readClipboardContent();
@@ -1154,6 +1270,26 @@ function connectPCSession(session) {
     ws.onmessage = (message) => receiveEvent(status, messages, session, JSON.parse(message.data));
   };
   connect();
+}
+
+async function startLocalPC() {
+  pageRole = "pc";
+  pc.classList.remove("hidden");
+  mobile.classList.add("hidden");
+  document.body.classList.add("pc-mode");
+  document.body.classList.remove("mobile-mode", "session-pane-open", "device-pane-open");
+  appLayout.classList.add("pc-mode");
+  appLayout.classList.remove("mobile-mode");
+  sessionPane.classList.remove("hidden");
+  devicePane.classList.remove("hidden");
+  document.querySelector("#mobileActions").classList.add("hidden");
+  syncPaneLayout();
+
+  await refreshLocalStatus();
+  document.querySelector("#sendPC").onclick = () => sendClipboard(document.querySelector("#pcStatus"), document.querySelector("#pcMessages"));
+  setupPeekButton(document.querySelector("#peekPC"));
+  if (localPollTimer) clearInterval(localPollTimer);
+  localPollTimer = setInterval(refreshLocalStatus, 1500);
 }
 
 async function startPC() {
@@ -1258,7 +1394,22 @@ async function startMobile() {
   setupPeekButton(document.querySelector("#peekClipboard"));
 }
 
-if (sid) {
+if (localBridge) {
+  startLocalPC().catch((err) => {
+    pageRole = "pc";
+    pc.classList.remove("hidden");
+    document.body.classList.add("pc-mode");
+    document.body.classList.remove("mobile-mode", "session-pane-open", "device-pane-open");
+    appLayout.classList.add("pc-mode");
+    appLayout.classList.remove("mobile-mode");
+    sessionPane.classList.remove("hidden");
+    devicePane.classList.remove("hidden");
+    document.querySelector("#mobileActions").classList.add("hidden");
+    syncPaneLayout();
+    document.querySelector("#pcStatus").textContent = err.message;
+    showNotice(err.message, "error", "");
+  });
+} else if (sid) {
   startPC().catch(() => startMobile());
 } else {
   startPC().catch((err) => {

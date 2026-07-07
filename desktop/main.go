@@ -5,9 +5,13 @@ import (
 	"log"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
+	closeLog := initLogging()
+	defer closeLog()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -15,15 +19,24 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	go app.connectLoop(ctx)
+	go app.runRelay(ctx)
 
-	uiURL, err := startControlServer(ctx, app)
+	bridge, err := startControlServer(ctx, app)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := openBrowser(uiURL); err != nil {
-		log.Printf("open control window: %v", err)
-	}
+	app.setUIURL(bridge.BaseURL, bridge.Token)
 
-	<-ctx.Done()
+	go func() {
+		timer := time.NewTimer(1200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+			// ponytail: open once on startup until tray visibility is proven reliable across Windows notification settings.
+			app.openUI()
+		}
+	}()
+
+	runTray(ctx, app)
 }

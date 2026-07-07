@@ -12,3 +12,4 @@ func writeClipboardText(string) error        { return errors.New("windows only")
 func readClipboardImagePNG() (string, error) { return "", errors.New("windows only") }
 func writeClipboardImagePNG(string) error    { return errors.New("windows only") }
 func openBrowser(string) error               { return nil }
+func openAppWindow(string) error             { return nil }

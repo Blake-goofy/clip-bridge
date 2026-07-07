@@ -114,7 +114,38 @@ func openBrowser(target string) error {
 	if target == "" {
 		return errors.New("empty url")
 	}
-	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
+	cmd := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", target)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err == nil {
+		return nil
+	}
+	cmd = exec.Command("explorer.exe", target)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Start()
+}
+
+func openAppWindow(target string) error {
+	if target == "" {
+		return errors.New("empty url")
+	}
+	for _, candidate := range edgeCandidates() {
+		if path, err := exec.LookPath(candidate); err == nil {
+			cmd := exec.Command(path, "--app="+target, "--new-window")
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+			return cmd.Start()
+		}
+	}
+	return openBrowser(target)
+}
+
+func edgeCandidates() []string {
+	var out []string
+	for _, base := range []string{os.Getenv("ProgramFiles(x86)"), os.Getenv("ProgramFiles"), os.Getenv("LocalAppData")} {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		out = append(out, filepath.Join(base, "Microsoft", "Edge", "Application", "msedge.exe"))
+	}
+	return append(out, "msedge.exe")
 }

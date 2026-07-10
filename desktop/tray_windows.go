@@ -117,10 +117,13 @@ func trayWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 		case menuQuit:
 			trayApp.cancel()
-			win.PostQuitMessage(0)
+			win.DestroyWindow(hwnd)
 		}
 		return 0
 	case win.WM_CLOSE:
+		win.DestroyWindow(hwnd)
+		return 0
+	case win.WM_DESTROY:
 		win.PostQuitMessage(0)
 		return 0
 	}
@@ -159,7 +162,7 @@ func showTrayMenu(hwnd win.HWND) {
 	win.SetForegroundWindow(hwnd)
 	cmd := win.TrackPopupMenu(menu, win.TPM_RETURNCMD|win.TPM_RIGHTBUTTON|win.TPM_NOANIMATION, pt.X, pt.Y, 0, hwnd, nil)
 	if cmd != 0 {
-		win.PostMessage(hwnd, win.WM_COMMAND, uintptr(cmd), 0)
+		win.SendMessage(hwnd, win.WM_COMMAND, uintptr(cmd), 0)
 	}
 }
 

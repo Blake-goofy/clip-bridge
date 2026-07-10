@@ -48,6 +48,7 @@ type pendingJoin struct {
 	requestedAt time.Time
 	lastSeen    time.Time
 	approved    bool
+	denied      bool
 }
 
 type deviceView struct {
@@ -78,6 +79,7 @@ type joinResult struct {
 	setMobileCookie  bool
 	setPendingCookie bool
 	pending          bool
+	denied           bool
 }
 
 func (h *hub) createSession() (string, string, error) {
@@ -256,6 +258,9 @@ func (h *hub) requestMobileJoin(sid, existingToken, pendingToken, deviceName str
 			p.name = deviceName
 		}
 		s.lastSeen = now
+		if p.denied {
+			return joinResult{denied: true}, nil
+		}
 		if !p.approved {
 			return joinResult{pending: true}, nil
 		}
@@ -342,10 +347,33 @@ func (h *hub) approveJoin(sid, token, requestID string) error {
 		return errUnauthorized
 	}
 	p, ok := s.pending[requestID]
-	if !ok || now.Sub(p.requestedAt) > pendingJoinTTL {
+	if !ok || now.Sub(p.requestedAt) > pendingJoinTTL || p.denied {
 		return errNotFound
 	}
 	p.approved = true
+	p.lastSeen = now
+	s.lastSeen = now
+	_ = broadcastDevicesLocked(s)
+	return nil
+}
+
+func (h *hub) denyJoin(sid, token, requestID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := h.now()
+	h.cleanupLocked(now)
+	s, ok := h.sessionLocked(sid)
+	if !ok {
+		return errNotFound
+	}
+	if findDeviceByTokenLocked(s, token) == nil {
+		return errUnauthorized
+	}
+	p, ok := s.pending[requestID]
+	if !ok || now.Sub(p.requestedAt) > pendingJoinTTL || p.denied {
+		return errNotFound
+	}
+	p.denied = true
 	p.lastSeen = now
 	s.lastSeen = now
 	_ = broadcastDevicesLocked(s)
@@ -728,7 +756,7 @@ func deviceViewsLocked(s *session, active *device) []deviceView {
 func joinRequestViewsLocked(s *session) []joinRequestView {
 	requests := make([]joinRequestView, 0, len(s.pending))
 	for _, p := range s.pending {
-		if p.approved {
+		if p.approved || p.denied {
 			continue
 		}
 		requests = append(requests, joinRequestView{

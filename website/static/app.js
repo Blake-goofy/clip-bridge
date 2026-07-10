@@ -280,17 +280,27 @@ function joinRequestRow(request) {
   name.className = "device-name";
   name.textContent = request.name || "New device";
 
+  const actions = document.createElement("div");
+  actions.className = "join-request-actions";
+
   const approve = document.createElement("button");
-  approve.className = "approve-join-button";
+  approve.className = "join-request-button";
   approve.type = "button";
   approve.textContent = "Allow";
   approve.onclick = () => approveJoin(request.id);
+
+  const deny = document.createElement("button");
+  deny.className = "join-request-button danger-button";
+  deny.type = "button";
+  deny.textContent = "Deny";
+  deny.onclick = () => denyJoin(request.id);
+  actions.append(approve, deny);
 
   const meta = document.createElement("div");
   meta.className = "device-meta";
   meta.textContent = formatConnectedAt(request.requestedAt).replace("Connected", "Requested");
 
-  row.append(status, name, approve, meta);
+  row.append(status, name, actions, meta);
   return row;
 }
 
@@ -302,6 +312,19 @@ async function approveJoin(requestID) {
       await postJSON(`/api/session/${encodeURIComponent(sid)}/joins/${encodeURIComponent(requestID)}/approve`);
     }
     showNotice("Device allowed", "success", "");
+  } catch (err) {
+    showNotice(err.message, "error", "");
+  }
+}
+
+async function denyJoin(requestID) {
+  try {
+    if (localBridge && sid === localActiveSID) {
+      await localFetch("/deny", { id: requestID });
+    } else {
+      await postJSON(`/api/session/${encodeURIComponent(sid)}/joins/${encodeURIComponent(requestID)}/deny`);
+    }
+    showNotice("Device denied", "success", "");
   } catch (err) {
     showNotice(err.message, "error", "");
   }
@@ -743,9 +766,9 @@ function applyLocalStatus(data) {
   if (sid !== data.sid) {
     sid = data.sid;
     rememberSID(sid);
-    setJoinLink(sid);
     history.replaceState(null, "", `/s/${encodeURIComponent(sid)}${sessionHash()}`);
   }
+  setJoinLink(sid);
   deviceCache.set(data.sid, data.deviceList || []);
   joinRequestCache.set(data.sid, data.joinList || []);
   const active = (data.deviceList || []).find((device) => device.active);

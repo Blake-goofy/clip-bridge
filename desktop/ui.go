@@ -129,6 +129,23 @@ func startControlServer(ctx context.Context, app *desktopApp) (localBridge, erro
 		}
 		writeLocalJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}))
+	mux.HandleFunc("/deny", handle(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req approveRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+			writeLocalError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if err := app.denyJoin(r.Context(), req.ID); err != nil {
+			log.Printf("deny join: %v", err)
+			writeLocalUpstreamError(w, err)
+			return
+		}
+		writeLocalJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}))
 	mux.HandleFunc("/session/name", handle(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)

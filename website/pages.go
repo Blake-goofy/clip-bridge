@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strings"
 )
 
 //go:embed static/index.html
@@ -23,10 +24,11 @@ var faviconSVG string
 var qrcodeJS string
 
 type documentPage struct {
-	Title      string
-	Nonce      string
-	Path       string
-	Paragraphs []string
+	Title               string
+	Nonce               string
+	Path                string
+	Paragraphs          []string
+	ShowWindowsDownload bool
 }
 
 var documentPageTemplate = template.Must(template.New("document").Parse(`<!doctype html>
@@ -142,7 +144,7 @@ var documentPageTemplate = template.Must(template.New("document").Parse(`<!docty
     </section>
   </main>
   <footer class="site-footer">
-    <a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | {{if ne .Path "/analytics"}}<a href="/analytics">Analytics</a> | {{end}}{{if ne .Path "/privacy"}}<a href="/privacy">Privacy</a> | {{end}}{{if ne .Path "/terms"}}<a href="/terms">Terms</a> | {{end}}<a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
+    <a href="/">Home</a> | {{if .ShowWindowsDownload}}<a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | {{end}}{{if ne .Path "/analytics"}}<a href="/analytics">Analytics</a> | {{end}}{{if ne .Path "/privacy"}}<a href="/privacy">Privacy</a> | {{end}}{{if ne .Path "/terms"}}<a href="/terms">Terms</a> | {{end}}<a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
   </footer>
 </body>
 </html>
@@ -504,7 +506,7 @@ var analyticsPageTemplate = template.Must(template.New("analytics").Parse(`<!doc
     {{end}}
   </main>
   <footer class="site-footer">
-    <a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a> | <a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
+    <a href="/">Home</a> | {{if .ShowWindowsDownload}}<a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | {{end}}<a href="/privacy">Privacy</a> | <a href="/terms">Terms</a> | <a href="https://github.com/Blake-goofy/clip-bridge" target="_blank" rel="noreferrer">Source code</a>
   </footer>
 </body>
 </html>
@@ -514,7 +516,15 @@ func (a *app) handleIndex(w http.ResponseWriter, r *http.Request) {
 	csp := "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self' data:; connect-src 'self' ws: wss: http://127.0.0.1:* http://localhost:*; style-src 'self'; script-src 'self'"
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(indexHTML))
+	body := indexHTML
+	if !isWindowsUserAgent(r.UserAgent()) {
+		body = strings.Replace(body, "data-windows-download", "data-windows-download hidden", 1)
+	}
+	_, _ = w.Write([]byte(body))
+}
+
+func isWindowsUserAgent(userAgent string) bool {
+	return strings.Contains(strings.ToLower(userAgent), "windows")
 }
 
 func (a *app) handleAnalytics(w http.ResponseWriter, r *http.Request) {
@@ -529,6 +539,7 @@ func (a *app) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary.Nonce = nonce
+	summary.ShowWindowsDownload = isWindowsUserAgent(r.UserAgent())
 	csp := "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; img-src 'self'; style-src 'nonce-" + nonce + "'"
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -539,8 +550,9 @@ func (a *app) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handlePrivacy(w http.ResponseWriter, r *http.Request) {
 	a.writeTemplatePage(w, "Privacy Policy", documentPageTemplate, documentPage{
-		Title: "Privacy Policy",
-		Path:  "/privacy",
+		Title:               "Privacy Policy",
+		Path:                "/privacy",
+		ShowWindowsDownload: isWindowsUserAgent(r.UserAgent()),
 		Paragraphs: []string{
 			"ClipBridge is built to move clipboard content between devices without accounts.",
 			"The Windows app can receive clipboard content without keeping the website open on your PC.",
@@ -555,8 +567,9 @@ func (a *app) handlePrivacy(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleTerms(w http.ResponseWriter, r *http.Request) {
 	a.writeTemplatePage(w, "Terms of Service", documentPageTemplate, documentPage{
-		Title: "Terms of Service",
-		Path:  "/terms",
+		Title:               "Terms of Service",
+		Path:                "/terms",
+		ShowWindowsDownload: isWindowsUserAgent(r.UserAgent()),
 		Paragraphs: []string{
 			"ClipBridge is provided as a lightweight clipboard handoff tool.",
 			"Do not use ClipBridge for unlawful activity, abuse, or sharing content you do not have the right to share.",

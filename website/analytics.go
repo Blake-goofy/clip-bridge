@@ -27,17 +27,18 @@ type analyticsLogEvent struct {
 }
 
 type analyticsSummary struct {
-	GeneratedAt       string
-	ClipboardShares   int
-	DevicesJoined     int
-	Daily             []analyticsDay
-	ChartDays         []analyticsDay
-	Range             string
-	RangeLabel        string
-	RangeOptions      []analyticsRangeOption
-	Chart             analyticsChart
-	AnalyticsDisabled bool
-	Nonce             string
+	GeneratedAt         string
+	ClipboardShares     int
+	DevicesJoined       int
+	Daily               []analyticsDay
+	ChartDays           []analyticsDay
+	Range               string
+	RangeLabel          string
+	RangeOptions        []analyticsRangeOption
+	Chart               analyticsChart
+	AnalyticsDisabled   bool
+	Nonce               string
+	ShowWindowsDownload bool
 }
 
 type analyticsDay struct {

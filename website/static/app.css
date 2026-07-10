@@ -453,13 +453,18 @@ button:disabled {
   height: 17px;
   stroke-width: 2.4;
 }
-.approve-join-button {
+.join-request-button {
   min-width: 70px;
   min-height: 34px;
   padding: 0 12px;
   font-size: 12px;
   text-align: center;
   white-space: nowrap;
+}
+.join-request-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
 }
 .empty-devices {
   margin: 12px 0 0;

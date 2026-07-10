@@ -311,6 +311,11 @@ func (a *app) handleJoinAction(w http.ResponseWriter, r *http.Request, sid, requ
 			writeHubError(w, err)
 			return
 		}
+	case "deny":
+		if err := a.hub.denyJoin(sid, token, requestID); err != nil {
+			writeHubError(w, err)
+			return
+		}
 	default:
 		http.NotFound(w, r)
 		return
@@ -388,6 +393,11 @@ func (a *app) handleJoin(w http.ResponseWriter, r *http.Request, sid string) {
 	}
 	if result.setPendingCookie {
 		setTokenCookie(w, r, pendingJoinCookieName(sid), result.pendingToken, pendingJoinTTL)
+	}
+	if result.denied {
+		clearTokenCookie(w, r, pendingJoinCookieName(sid))
+		writeError(w, http.StatusForbidden, "join request denied")
+		return
 	}
 	if result.setMobileCookie {
 		setTokenCookie(w, r, mobileCookieName(sid), result.mobileToken, idleTTL)

@@ -567,6 +567,14 @@ func (a *desktopApp) approveJoin(ctx context.Context, id string) error {
 	return a.postJSON(ctx, path, map[string]bool{"ok": true}, nil)
 }
 
+func (a *desktopApp) denyJoin(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	path := "/api/session/" + url.PathEscape(a.currentSession().SID) + "/joins/" + url.PathEscape(id) + "/deny"
+	return a.postJSON(ctx, path, map[string]bool{"ok": true}, nil)
+}
+
 func (a *desktopApp) postJSON(ctx context.Context, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {

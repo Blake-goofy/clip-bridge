@@ -336,6 +336,52 @@ func TestPCReceivesDeviceListUpdates(t *testing.T) {
 	t.Fatal("pc did not receive all connected devices")
 }
 
+func TestDenyJoinStopsPendingRequest(t *testing.T) {
+	h := newHub()
+	sid, pcToken, err := h.createSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.connectPC(sid, pcToken); err != nil {
+		t.Fatal(err)
+	}
+	result, err := h.requestMobileJoin(sid, "", "", "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.pending || result.pendingToken == "" {
+		t.Fatalf("join result = %#v, want pending request", result)
+	}
+
+	h.mu.Lock()
+	var requestID string
+	for id := range h.sessions[sid].pending {
+		requestID = id
+		break
+	}
+	h.mu.Unlock()
+	if requestID == "" {
+		t.Fatal("pending request was not created")
+	}
+	if err := h.denyJoin(sid, pcToken, requestID); err != nil {
+		t.Fatal(err)
+	}
+
+	h.mu.Lock()
+	requests := joinRequestViewsLocked(h.sessions[sid])
+	h.mu.Unlock()
+	if len(requests) != 0 {
+		t.Fatalf("join requests after deny = %#v, want none", requests)
+	}
+	result, err = h.requestMobileJoin(sid, "", result.pendingToken, "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.denied {
+		t.Fatalf("join result after deny = %#v, want denied", result)
+	}
+}
+
 func TestDeviceListTracksLiveConnections(t *testing.T) {
 	h := newHub()
 	sid, pcToken, err := h.createSession()
@@ -758,7 +804,7 @@ func TestAnalyticsPageRendersDashboard(t *testing.T) {
 		"Devices joined",
 		"color: #fff;",
 		`<footer class="site-footer">`,
-		`<a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a>`,
+		`<a href="/">Home</a> | <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a>`,
 		"<polyline",
 	} {
 		if !strings.Contains(body, want) {
@@ -791,13 +837,13 @@ func TestDocumentPagesUseDarkThemeAndFooter(t *testing.T) {
 		{
 			path:          "/privacy",
 			title:         "Privacy Policy",
-			wantFooter:    `<a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | <a href="/analytics">Analytics</a> | <a href="/terms">Terms</a> |`,
+			wantFooter:    `<a href="/">Home</a> | <a href="/analytics">Analytics</a> | <a href="/terms">Terms</a> |`,
 			forbidSelfRef: `<a href="/privacy">Privacy</a>`,
 		},
 		{
 			path:          "/terms",
 			title:         "Terms of Service",
-			wantFooter:    `<a href="/">Home</a> | <a href="https://github.com/Blake-goofy/clip-bridge/releases/latest" target="_blank" rel="noreferrer">Download for Windows</a> | <a href="/analytics">Analytics</a> | <a href="/privacy">Privacy</a> |`,
+			wantFooter:    `<a href="/">Home</a> | <a href="/analytics">Analytics</a> | <a href="/privacy">Privacy</a> |`,
 			forbidSelfRef: `<a href="/terms">Terms</a>`,
 		},
 	} {
@@ -835,6 +881,28 @@ func TestDocumentPagesUseDarkThemeAndFooter(t *testing.T) {
 	}
 }
 
+func TestWindowsDownloadLinkRequiresWindowsUserAgent(t *testing.T) {
+	a := newApp()
+	for _, tt := range []struct {
+		name      string
+		userAgent string
+		hidden    bool
+	}{
+		{name: "windows", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+		{name: "non-windows", userAgent: "Mozilla/5.0 (X11; Linux x86_64)", hidden: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("User-Agent", tt.userAgent)
+			w := httptest.NewRecorder()
+			a.ServeHTTP(w, req)
+			if got := strings.Contains(w.Body.String(), "data-windows-download hidden"); got != tt.hidden {
+				t.Fatalf("download hidden = %v, want %v", got, tt.hidden)
+			}
+		})
+	}
+}
+
 func TestIndexUsesNeutralClipboardUI(t *testing.T) {
 	ui := indexHTML + appCSS + appJS
 	for _, old := range []string{"iPhone", "Safari", "No phone", "Connected to PC", "Send Clipboard", "<title>Clip Bridge</title>", "Waiting.", "receiver", "sender", "New Session", "Add link", "border-radius: 24px", "box-shadow", "notif-overlay", "qrWrap.classList.toggle(\"hidden\", event.connected)", "transform: translateX(100%)", "syncJoinedPaneLayout", "copyConnectURL", "connectURL", "copy-link", "?fragment=", "qrQuery", "session-select", "session-delete", "reveal-delete", "swipeStartX", "readClipboardImage"} {
@@ -842,10 +910,13 @@ func TestIndexUsesNeutralClipboardUI(t *testing.T) {
 			t.Fatalf("index still contains platform-specific or removed UI text %q", old)
 		}
 	}
-	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="stylesheet" href="/app.css">`, `<script src="/qrcode.js"></script>`, `<script src="/app.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", `class="site-footer"`, "Download for Windows", "grid-template-rows: minmax(0, 1fr) auto", "min-height: 0", ".app-layout.pc-mode .site-footer", ".site-footer a:hover", "text-decoration: underline", "Analytics", "Privacy", "Terms", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-session-button", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardContent", "readClipboardPreview", "text/plain", "showClipboardPeek", "setupPeekButton", "peekAutoHideMs = 2500", "noticeHiddenQR", "dataset.noticeHidden", "setTimeout(hideNotice, 2500)", "(hover: none) and (pointer: coarse)", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")", "position: sticky", "onMiddleClick", "onauxclick", "deleteDevice(device)", "width: 100vw", "border-radius: 8px 8px 0 0"} {
+	for _, want := range []string{"<title>ClipBridge</title>", `<link rel="stylesheet" href="/app.css">`, `<script src="/qrcode.js"></script>`, `<script src="/app.js"></script>`, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`, `<h1><img class="brand-icon" src="/favicon.svg" alt="">ClipBridge</h1>`, "Secure clipboard handoff", "Send clipboard", "Peek clipboard", `class="site-footer"`, "Download for Windows", "grid-template-rows: minmax(0, 1fr) auto", "min-height: 0", ".app-layout.pc-mode .site-footer", ".site-footer a:hover", "text-decoration: underline", "Analytics", "Privacy", "Terms", "Source code", "localStorage", "/resume", "sessionPane", "sessionPaneToggle", "devicePane", "devicePaneToggle", "body.pc-mode .desktop-pane", "syncPaneLayout", "mobileQr", "toggleQR", "drawQRCode", "ClipBridgeQRCode", "addSession", "Add session", "sessionList", "sessionModal", "sessionNameInput", "defaultSessionName", "connectedDeviceCount", "edit-device-button", "join-request-button", "Deny", "denyJoin", "/deny", "notice.peek", "notice.peek .notif-status", "notif-image", "readClipboardContent", "readClipboardPreview", "text/plain", "showClipboardPeek", "setupPeekButton", "peekAutoHideMs = 2500", "noticeHiddenQR", "dataset.noticeHidden", "setTimeout(hideNotice, 2500)", "(hover: none) and (pointer: coarse)", "position: fixed", "padding-right: 0", "encryptedClipboardMIME", "copySelectedLink", "sessionLink", "/name", "event.type === \"session\"", "updateSessionName", "deviceCount", "/disconnect", "pcActions", "pcMessages", "mobileMessages", "navigator.clipboard.writeText(text || \"\")", "position: sticky", "onMiddleClick", "onauxclick", "deleteDevice(device)", "width: 100vw", "border-radius: 8px 8px 0 0"} {
 		if !strings.Contains(ui, want) {
 			t.Fatalf("index is missing chat UI marker %q", want)
 		}
+	}
+	if !strings.Contains(ui, "edit-session-button") {
+		t.Fatal("index is missing session edit control")
 	}
 	if strings.Contains(indexHTML, "Blake Becker") {
 		t.Fatal("index footer should not include author text")

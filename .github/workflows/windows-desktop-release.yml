@@ -20,6 +20,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install Windows resource tool
+        shell: pwsh
+        run: |
+          go install github.com/akavel/rsrc@latest
+          Add-Content $env:GITHUB_PATH "$(go env GOPATH)\bin"
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:

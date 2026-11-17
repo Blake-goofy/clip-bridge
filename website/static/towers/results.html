@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tower of Hanoi results</title>
+    <link rel="stylesheet" href="/towers/styles.css">
+  </head>
+  <body>
+    <main class="container">
+      <section class="panel results-panel" aria-labelledby="results-title">
+        <h1 id="results-title">Tower of Hanoi results</h1>
+        <form method="post" action="/towers/results">
+          <label for="code">Attempt code</label>
+          <div class="code-controls">
+            <input id="code" name="code" value="{{.Code}}" type="text" autocomplete="off" spellcheck="false" required>
+            <button type="submit">Look up</button>
+          </div>
+        </form>
+        {{if .Message}}<p role="status">{{.Message}}</p>{{end}}
+        <p><a href="/towers/results.csv" download>Export all CSV</a></p>
+        <p>The CSV contains all study attempts and is publicly accessible.</p>
+      </section>
+      {{with .Attempt}}
+      <section class="panel results-panel" aria-labelledby="attempt-title">
+        <h2 id="attempt-title">{{.Code}}</h2>
+        <dl>
+          <dt>Status</dt><dd>{{if .CompletedAt.IsZero}}Incomplete{{else}}Completed{{end}}</dd>
+          <dt>Started (UTC)</dt><dd>{{.StartedAt.Format "2006-01-02 15:04:05.000"}}</dd>
+          <dt>Last saved (UTC)</dt><dd>{{.LastSavedAt.Format "2006-01-02 15:04:05.000"}}</dd>
+          {{if not .CompletedAt.IsZero}}<dt>Completed (UTC)</dt><dd>{{.CompletedAt.Format "2006-01-02 15:04:05.000"}}</dd>{{end}}
+          <dt>{{if .CompletedAt.IsZero}}Elapsed at last recorded move{{else}}Elapsed{{end}}</dt><dd>{{.ElapsedMs}} ms</dd>
+          <dt>Successful moves</dt><dd>{{.SuccessfulMoves}}</dd>
+          <dt>Invalid moves</dt><dd>{{.InvalidMoves}}</dd>
+          <dt>Total attempts</dt><dd>{{len .Moves}}</dd>
+        </dl>
+        {{if .Moves}}
+        <details>
+          <summary>Move history</summary>
+          <table class="move-table">
+            <thead><tr><th scope="col">From peg</th><th scope="col">To peg</th><th scope="col">Elapsed (ms)</th><th scope="col">Outcome</th></tr></thead>
+            <tbody>
+            {{range .Moves}}
+              <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{.ElapsedMs}}</td><td>{{if .Valid}}Successful{{else}}Invalid{{end}}</td></tr>
+            {{end}}
+            </tbody>
+          </table>
+        </details>
+        {{end}}
+      </section>
+      {{end}}
+    </main>
+  </body>
+</html>

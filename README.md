@@ -41,6 +41,22 @@ The desktop app opens the public ClipBridge site for its active session and pass
 - Keep one instance for now. Sessions, device names, and join-link aliases are intentionally in memory and disappear when the process restarts or the session expires.
 - Analytics are appended to `analytics.jsonl` by default. Set `ANALYTICS_PATH=/path/to/analytics.jsonl` to choose a persistent volume path, or `ANALYTICS_PATH=off` to disable analytics.
 
+## Tower of Hanoi study
+
+- Players open `/towers`, copy their attempt code, and paste it into the corresponding Qualtrics response field. Each page load gets a fresh code. A record is created when they press **Start**, and progress is saved after legal and invalid moves. Wait for the saved message before leaving. If clipboard access is blocked, the Copy button selects the code for manual copying.
+- Open `/towers/results` to look up a code or download all attempts. The CSV includes completed and incomplete attempts, one row each, with UTC timestamps, move counts, and full move history as JSON in `moves_json`. Pegs 1, 2, and 3 are left, middle, and right. Elapsed time for incomplete attempts reflects the last recorded move, or zero if none was recorded.
+- The lookup and bulk CSV are public. The app saves task activity and random codes. Keep participant names, Qualtrics response IDs, and the survey-to-attempt mapping in Qualtrics. Keep the results page out of participant-facing survey content.
+- Keep a single Railway instance with a [persistent volume](https://docs.railway.com/volumes). The task stores its journal at `$RAILWAY_VOLUME_MOUNT_PATH/towers-results.jsonl` by default. To override the path, set `TOWERS_RESULTS_PATH` to a dedicated file on the mounted volume. Locally it defaults to `towers-results.jsonl` beside an absolute `ANALYTICS_PATH`, or in the current directory. Results are retained until manually deleted. To remove them, export a copy if needed, stop the service, remove only the Towers journal, and start the service again.
+
+In Qualtrics, paste this into the question’s [HTML View](https://www.qualtrics.com/support/survey-platform/survey-module/editing-questions/rich-content-editor/rich-content-editor-overview/). Add a text-entry field for the attempt code next to each task occurrence so repeat visits can be matched to the right attempt.
+
+```html
+<iframe src="https://clipbridge.cc/towers" title="Tower of Hanoi task"
+        width="100%" height="760" allow="clipboard-write"></iframe>
+```
+
+Before collecting responses, preview and submit a test response in Lauren’s survey. Verify the iframe loads, the code appears in the Qualtrics export, and the same code finds the expected attempt in ClipBridge. For a custom survey domain, set `TOWERS_FRAME_ANCESTORS` to a space-separated list of allowed HTTPS origins (this replaces the default Qualtrics `.com` and `.eu` origins and subdomains). If the iframe is nested, include each ancestor origin. Try the flow on a narrow screen and with clipboard access blocked.
+
 ## Windows Release
 
 Build the desktop app:

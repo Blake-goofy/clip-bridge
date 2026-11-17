@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tower of Hanoi</title>
+    <link rel="stylesheet" href="/towers/styles.css">
+    <script src="/towers/game.js" defer></script>
+  </head>
+  <body>
+    <main class="container">
+      <section id="start-screen" class="panel" aria-labelledby="start-title">
+        <h1 id="start-title">Tower of Hanoi</h1>
+        <p>Click “Start” to begin task</p>
+        <button id="start-button" type="button" disabled>Start</button>
+      </section>
+
+      <section class="panel attempt-panel" aria-label="Attempt code">
+        <label for="attempt-code">Attempt code</label>
+        <div class="code-controls">
+          <input id="attempt-code" type="text" readonly autocomplete="off" spellcheck="false">
+          <button id="copy-code" type="button" disabled>Copy code</button>
+        </div>
+        <p id="copy-status" role="status">Paste this code into the survey.</p>
+        <p>Your attempt code and task activity are saved from Start and included in a public download.</p>
+        <p id="save-status" role="status"></p>
+        <button id="retry-save" type="button" hidden>Retry save</button>
+      </section>
+
+      <section id="game-screen" hidden aria-labelledby="game-title">
+        <h1 id="game-title">Tower of Hanoi</h1>
+        <p id="instructions">Move all the discs from the left tower to the right one at a time. A disc cannot be on top of a smaller disc. Have fun!</p>
+        <p id="status" role="status" aria-live="polite"></p>
+
+        <div id="towers" role="group" aria-label="Tower of Hanoi game">
+          <button class="tower" type="button" data-tower="0" aria-label="Left tower"></button>
+          <button class="tower" type="button" data-tower="1" aria-label="Middle tower"></button>
+          <button class="tower" type="button" data-tower="2" aria-label="Right tower"></button>
+        </div>
+
+        <p id="completion" role="status" aria-live="polite" hidden>Task complete. Thank you.</p>
+      </section>
+    </main>
+  </body>
+</html>

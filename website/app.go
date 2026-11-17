@@ -41,6 +41,7 @@ var (
 type app struct {
 	hub       *hub
 	analytics *analytics
+	towers    *towersStore
 }
 
 type event struct {
@@ -61,6 +62,7 @@ func newApp() *app {
 	return &app{
 		hub:       h,
 		analytics: newAnalytics(func() time.Time { return h.now() }),
+		towers:    newTowersStore(),
 	}
 }
 
@@ -68,6 +70,8 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w, r)
 
 	switch {
+	case strings.HasPrefix(r.URL.Path, "/towers/") || r.URL.Path == "/towers" || r.URL.Path == "/api/towers/attempts":
+		a.handleTowers(w, r)
 	case r.Method == http.MethodGet && (r.URL.Path == "/" || isSessionPage(r.URL.Path)):
 		a.handleIndex(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/analytics":
